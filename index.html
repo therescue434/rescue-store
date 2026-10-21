@@ -11,9 +11,10 @@
     <!-- Google Fonts - Kanit -->
     <link href="https://fonts.googleapis.com/css2?family=Kanit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     
+    <!-- Firebase SDK (v11.6.1) for Realtime Multi-user Database -->
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-        import { getAuth, signInAnonymously, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
         import { getFirestore, collection, doc, setDoc, updateDoc, deleteDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
         const appId = typeof __app_id !== 'undefined' ? __app_id : 'rescue-store-app';
@@ -33,8 +34,11 @@
         window.db = db;
         window.appId = appId;
         window.auth = auth;
+        window.doc = doc;
+        window.setDoc = setDoc;
+        window.updateDoc = updateDoc;
+        window.deleteDoc = deleteDoc;
 
-        // Functions for Cloud Sync with Fallback
         async function initCloudSync() {
             try {
                 if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
@@ -43,114 +47,133 @@
                     await signInAnonymously(auth);
                 }
             } catch (err) {
-                console.warn("Auth fallback activated:", err);
+                console.warn("Auth fallback mode active:", err);
             }
 
-            // Realtime listener for Gears / Inventory
+            // Realtime Sync for Inventory
             try {
                 const gearColRef = collection(db, 'artifacts', appId, 'public', 'data', 'gears');
                 onSnapshot(gearColRef, (snapshot) => {
                     if (!snapshot.empty) {
-                        const remoteGears = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-                        window.gears = remoteGears;
+                        window.gears = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
                         window.saveLocalStorageData();
-                        window.renderInventory();
-                        window.updateStats();
+                    } else {
+                        seedDefaultData();
                     }
+                    window.renderInventory();
+                    window.updateStats();
                 }, (error) => {
-                    console.warn("Firestore listener fallback to local state:", error);
+                    console.warn("Firestore Realtime Sync fallback to local:", error);
                 });
-            } catch (e) { console.warn("Firestore gear listener skipped:", e); }
+            } catch (e) {
+                console.warn("Using local storage persistence");
+            }
 
-            // Realtime listener for Active Usages
+            // Realtime Sync for Active Usages
             try {
                 const usageColRef = collection(db, 'artifacts', appId, 'public', 'data', 'activeUsages');
                 onSnapshot(usageColRef, (snapshot) => {
-                    if (!snapshot.empty) {
-                        window.activeUsages = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-                        window.saveLocalStorageData();
-                        window.renderActiveUses();
-                        window.updateStats();
-                    }
-                }, (error) => {
-                    console.warn("Firestore active usages fallback:", error);
-                });
-            } catch (e) { console.warn("Firestore usage listener skipped:", e); }
+                    window.activeUsages = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
+                    window.saveLocalStorageData();
+                    window.renderActiveUses();
+                    window.updateStats();
+                }, (err) => console.warn("Active usages realtime listener restricted"));
+            } catch (e) {}
 
-            // Realtime listener for History
+            // Realtime Sync for History Logs
             try {
                 const historyColRef = collection(db, 'artifacts', appId, 'public', 'data', 'historyLogs');
                 onSnapshot(historyColRef, (snapshot) => {
-                    if (!snapshot.empty) {
-                        window.historyLogs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-                        window.saveLocalStorageData();
-                        window.renderHistory();
-                    }
-                }, (error) => {
-                    console.warn("Firestore history fallback:", error);
-                });
-            } catch (e) { console.warn("Firestore history listener skipped:", e); }
+                    window.historyLogs = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
+                    window.saveLocalStorageData();
+                    window.renderHistory();
+                }, (err) => console.warn("History logs realtime listener restricted"));
+            } catch (e) {}
+        }
+
+        async function seedDefaultData() {
+            if (window.gears && window.gears.length > 0) return;
+            const defaultGears = [
+                { id: 'GEAR-1', name: 'กล่องข้าว 1 ปอนด์ (1:500ใบ)', operator: 'เจ้าหน้าที่ครัว 401', code: 'เจ้าหน้าที่ครัว 401', total: 21, allocated: 0, borrowed: 4 },
+                { id: 'GEAR-2', name: 'น้ำตาลมิตรผล', operator: 'สโตร์กลาง', code: 'สโตร์กลาง', total: 10, allocated: 2, borrowed: 0 },
+                { id: 'GEAR-3', name: 'ขวดปรุงรสรสลาบผง', operator: 'พ่อครัวประจำจุด', code: 'พ่อครัวประจำจุด', total: 5, allocated: 0, borrowed: 2 },
+                { id: 'GEAR-4', name: 'ซึ้งนึ่ง (ใหญ่)', operator: 'ทีมกู้ภัย 12', code: 'ทีมกู้ภัย 12', total: 1, allocated: 0, borrowed: 0 },
+                { id: 'GEAR-5', name: 'ชุดตัดถ่าง ไฮดรอลิก Holmatro', operator: 'กู้ภัย 434', code: 'กู้ภัย 434', total: 2, allocated: 0, borrowed: 1 }
+            ];
+
+            window.gears = defaultGears;
+            window.saveLocalStorageData();
+            window.renderInventory();
+            window.updateStats();
+
+            try {
+                for (let item of defaultGears) {
+                    await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'gears', item.id), item);
+                }
+            } catch (err) {
+                console.warn("Seeding cloud data deferred to local");
+            }
         }
 
         window.initCloudSync = initCloudSync;
     </script>
     <style>
         * { font-family: 'Kanit', sans-serif; }
-        ::-webkit-scrollbar { width: 6px; height: 6px; }
-        ::-webkit-scrollbar-track { background: #1e293b; }
-        ::-webkit-scrollbar-thumb { background: #475569; border-radius: 4px; }
-        ::-webkit-scrollbar-thumb:hover { background: #64748b; }
+        ::-webkit-scrollbar { width: 5px; height: 5px; }
+        ::-webkit-scrollbar-track { background: #0f172a; }
+        ::-webkit-scrollbar-thumb { background: #334155; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #475569; }
+        .no-scrollbar::-webkit-scrollbar { display: none; }
+        .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
     </style>
 </head>
-<body class="bg-slate-900 text-slate-100 min-h-screen flex flex-col pb-12">
+<body class="bg-slate-900 text-slate-100 min-h-screen flex flex-col pb-10">
 
-    <header class="bg-gradient-to-r from-red-600 via-red-500 to-orange-600 shadow-md sticky top-0 z-40">
-        <div class="max-w-5xl mx-auto px-3 py-2.5 flex items-center justify-between gap-2">
-            <div class="flex items-center gap-2.5">
-                <div class="w-9 h-9 rounded-full bg-white text-red-600 flex items-center justify-center font-bold shadow text-base shrink-0 border-2 border-red-200">
+    <!-- Header & Navigation -->
+    <header class="bg-gradient-to-r from-red-600 via-red-500 to-orange-600 shadow-lg sticky top-0 z-40">
+        <div class="max-w-5xl mx-auto px-3 py-2 flex items-center justify-between gap-2">
+            <div class="flex items-center gap-2">
+                <div class="w-8 h-8 rounded-full bg-white text-red-600 flex items-center justify-center font-bold shadow shrink-0 text-sm border-2 border-red-200">
                     <i class="fa-solid fa-truck-medical"></i>
                 </div>
                 <div class="min-w-0">
-                    <h1 class="text-sm sm:text-base font-bold text-white leading-tight truncate">
+                    <h1 class="text-xs sm:text-sm font-bold text-white leading-tight truncate">
                         PohTeckTung Foundation
                     </h1>
-                    <p class="text-[10px] sm:text-xs text-red-100 opacity-90 truncate">สโตร์อุปกรณ์กู้ภัยมูลนิธิป่อเต็กตึ๊ง</p>
+                    <p class="text-[9px] sm:text-[10px] text-red-100 opacity-90 truncate">คลังวัตถุดิบ/อุปกรณ์ โรงครัวฉุกเฉิน & สโตร์กู้ภัย 400</p>
                 </div>
             </div>
 
-            <!-- Header Quick Action Buttons -->
             <div class="flex items-center gap-1.5 shrink-0">
-                <button onclick="openCheckoutModal()" class="bg-emerald-600 hover:bg-emerald-500 text-white px-2.5 py-1.5 rounded-lg font-medium shadow text-xs flex items-center gap-1 transition">
-                    <i class="fa-solid fa-hand-holding"></i> <span class="hidden sm:inline">เบิกใช้งาน</span>
+                <button onclick="openCheckoutModal()" class="bg-emerald-600 hover:bg-emerald-500 text-white px-2.5 py-1 rounded-lg font-medium shadow text-xs flex items-center gap-1 transition">
+                    <i class="fa-solid fa-hand-holding"></i> <span>เบิกใช้งาน</span>
                 </button>
             </div>
         </div>
 
-        <!-- Navigation Bar & Controls -->
-        <div class="bg-slate-800/95 border-t border-red-700/50 backdrop-blur">
-            <div class="max-w-5xl mx-auto px-2 flex items-center justify-between gap-2 h-11 text-xs">
+        <!-- Scrollable Navigation Tabs -->
+        <div class="bg-slate-800/95 border-t border-red-700/40 backdrop-blur">
+            <div class="max-w-5xl mx-auto px-2 flex items-center justify-between gap-1 h-10 text-xs">
                 
-                <!-- Scrollable Tabs Menu -->
-                <div class="flex items-center space-x-1 overflow-x-auto no-scrollbar py-1 pr-2 scroll-smooth">
-                    <button onclick="switchTab('inventory')" id="nav-inventory" class="whitespace-nowrap px-2.5 py-1.5 rounded-md font-medium transition flex items-center gap-1.5 bg-red-600 text-white shadow shrink-0 text-[11px] sm:text-xs">
-                        <i class="fa-solid fa-list-check"></i> ตารางรายการ
+                <div class="flex items-center space-x-1 overflow-x-auto no-scrollbar py-1 pr-1">
+                    <button onclick="switchTab('inventory')" id="nav-inventory" class="whitespace-nowrap px-2.5 py-1 rounded-md font-medium transition flex items-center gap-1 bg-red-600 text-white shadow shrink-0 text-[11px]">
+                        <i class="fa-solid fa-list"></i> ตารางรายการ
                     </button>
-                    <button onclick="switchTab('active-uses')" id="nav-active-uses" class="whitespace-nowrap px-2.5 py-1.5 rounded-md font-medium transition flex items-center gap-1.5 text-slate-300 hover:bg-slate-700 hover:text-white shrink-0 text-[11px] sm:text-xs">
+                    <button onclick="switchTab('active-uses')" id="nav-active-uses" class="whitespace-nowrap px-2.5 py-1 rounded-md font-medium transition flex items-center gap-1 text-slate-300 hover:bg-slate-700 shrink-0 text-[11px]">
                         <i class="fa-solid fa-location-dot text-red-400"></i> กำลังใช้งาน
                         <span id="badge-active-count" class="bg-red-500 text-white text-[9px] px-1.5 py-0.2 rounded-full">0</span>
                     </button>
-                    <button onclick="switchTab('history')" id="nav-history" class="whitespace-nowrap px-2.5 py-1.5 rounded-md font-medium transition flex items-center gap-1.5 text-slate-300 hover:bg-slate-700 hover:text-white shrink-0 text-[11px] sm:text-xs">
-                        <i class="fa-solid fa-clock-rotate-left"></i> ประวัติ Log
+                    <button onclick="switchTab('history')" id="nav-history" class="whitespace-nowrap px-2.5 py-1 rounded-md font-medium transition flex items-center gap-1 text-slate-300 hover:bg-slate-700 shrink-0 text-[11px]">
+                        <i class="fa-solid fa-clock-rotate-left text-amber-400"></i> ประวัติ Log
                     </button>
                 </div>
 
-                <!-- Secondary Actions -->
-                <div class="flex items-center gap-1.5 shrink-0 pl-1 border-l border-slate-700">
-                    <button id="admin-status-btn" onclick="openAdminModal()" class="bg-slate-900/80 hover:bg-slate-900 text-amber-400 border border-amber-500/30 px-2 py-1 rounded text-[10px] sm:text-[11px] font-medium transition flex items-center gap-1 whitespace-nowrap">
+                <div class="flex items-center gap-1 shrink-0 pl-1 border-l border-slate-700">
+                    <button id="admin-status-btn" onclick="openAdminModal()" class="bg-slate-900 hover:bg-slate-950 text-amber-400 border border-amber-500/30 px-2 py-1 rounded text-[10px] font-medium transition flex items-center gap-1 whitespace-nowrap">
                         <i class="fa-solid fa-user-shield"></i> <span id="admin-btn-label">Admin Login</span>
                     </button>
-                    <button onclick="exportCSV()" class="bg-slate-900/80 hover:bg-slate-900 text-slate-200 border border-slate-700 text-[10px] sm:text-[11px] px-2 py-1 rounded font-medium transition flex items-center gap-1 whitespace-nowrap" title="Export CSV">
-                        <i class="fa-solid fa-file-csv text-emerald-400"></i> <span class="hidden md:inline">CSV</span>
+                    <button onclick="exportCSV()" class="bg-slate-900 hover:bg-slate-950 text-slate-200 border border-slate-700 text-[10px] px-2 py-1 rounded font-medium transition flex items-center gap-1 whitespace-nowrap">
+                        <i class="fa-solid fa-file-csv text-emerald-400"></i> <span class="hidden sm:inline">CSV</span>
                     </button>
                 </div>
 
@@ -158,26 +181,27 @@
         </div>
     </header>
 
-    <main class="max-w-5xl mx-auto px-2 sm:px-4 mt-3 flex-1 w-full space-y-3">
+    <main class="max-w-5xl mx-auto px-2 sm:px-4 mt-2.5 flex-1 w-full space-y-2.5">
+
         <!-- Search Bar -->
         <div class="relative">
-            <i class="fa-solid fa-magnifying-glass absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-xs"></i>
-            <input type="text" id="search-inventory" oninput="renderInventory()" placeholder="ค้นหาชื่อวัตถุดิบ-อุปกรณ์..." class="w-full bg-slate-800 border border-slate-700 rounded-lg pl-9 pr-3 py-2 text-xs text-slate-100 focus:outline-none focus:border-red-500 placeholder:text-slate-500 shadow-sm">
+            <i class="fa-solid fa-magnifying-glass absolute left-3 top-2.5 text-slate-400 text-xs"></i>
+            <input type="text" id="search-inventory" oninput="renderInventory()" placeholder="ค้นหาชื่อวัตถุดิบ-อุปกรณ์ หรือชื่อผู้ดำเนินการ..." class="w-full bg-slate-800 border border-slate-700 rounded-lg pl-8 pr-3 py-1.5 text-xs text-white placeholder-slate-400 focus:outline-none focus:border-red-500">
         </div>
 
         <!-- Stat Cards -->
         <div class="grid grid-cols-3 gap-2 text-center">
-            <div class="bg-slate-800/90 border border-slate-700 rounded-lg p-2.5 shadow-sm">
-                <div id="stat-total-gear" class="text-xl font-bold text-slate-100">0</div>
-                <div class="text-[11px] text-slate-400 font-medium mt-0.5">รายการทั้งหมด</div>
+            <div class="bg-slate-800/90 border border-slate-700 rounded-lg p-2 shadow-sm">
+                <div id="stat-total-gear" class="text-base sm:text-lg font-bold text-slate-100">0</div>
+                <div class="text-[10px] text-slate-400 font-medium">รายการทั้งหมด</div>
             </div>
-            <div class="bg-slate-800/90 border border-slate-700 rounded-lg p-2.5 shadow-sm">
-                <div id="stat-allocated-gear" class="text-xl font-bold text-amber-400">0</div>
-                <div class="text-[11px] text-slate-400 font-medium mt-0.5">จัดนำส่ง</div>
+            <div class="bg-slate-800/90 border border-slate-700 rounded-lg p-2 shadow-sm">
+                <div id="stat-allocated-gear" class="text-base sm:text-lg font-bold text-emerald-400">0</div>
+                <div class="text-[10px] text-slate-400 font-medium">จัดนำส่ง</div>
             </div>
-            <div class="bg-slate-800/90 border border-slate-700 rounded-lg p-2.5 shadow-sm">
-                <div id="stat-ready-gear" class="text-xl font-bold text-emerald-400">0</div>
-                <div class="text-[11px] text-slate-400 font-medium mt-0.5">คงเหลือ</div>
+            <div class="bg-slate-800/90 border border-slate-700 rounded-lg p-2 shadow-sm">
+                <div id="stat-ready-gear" class="text-base sm:text-lg font-bold text-teal-300">0</div>
+                <div class="text-[10px] text-slate-400 font-medium">คงเหลือ</div>
             </div>
         </div>
 
@@ -188,7 +212,7 @@
                     <table class="w-full text-left text-xs">
                         <thead class="bg-slate-900/90 text-slate-400 border-b border-slate-700 font-medium">
                             <tr>
-                                <th class="p-2.5 pl-3">ชื่อรายการ</th>
+                                <th class="p-2.5 pl-3">ชื่อรายการ / ผู้ดำเนินการ</th>
                                 <th class="p-2.5 text-center text-slate-300 w-12">ทั้งหมด</th>
                                 <th class="p-2.5 text-center text-emerald-400 w-12">จัดนำ</th>
                                 <th class="p-2.5 text-center text-amber-400 w-12">เบิกออก</th>
@@ -207,14 +231,14 @@
                 <i class="fa-solid fa-plus"></i> + เพิ่มรายการใหม่
             </button>
 
-            <!-- Restricted Log Notice -->
-            <div class="bg-slate-800/60 border border-slate-700/60 rounded-lg p-4 text-center space-y-2">
+            <!-- Restricted Log Notice for Tab 1 -->
+            <div id="inventory-log-notice" class="bg-slate-800/60 border border-slate-700/60 rounded-lg p-4 text-center space-y-2">
                 <div class="text-amber-400 text-sm flex items-center justify-center gap-1.5 font-medium">
                     <i class="fa-solid fa-lock"></i> ข้อมูล Log ถูกจำกัดสิทธิ์การเข้าถึง
                 </div>
-                <p class="text-[11px] text-slate-400">เงื่อนไขการจำกัดสิทธิ์สำหรับผู้ดูแลระบบ เพื่อบันทึกข้อมูลการใช้งาน</p>
+                <p class="text-[11px] text-slate-400">กรอกรหัส PIN Admin เพื่อปลดล็อกเข้าดูประวัติและ Log การใช้งานระบบทั้งหมด</p>
                 <button onclick="openAdminModal()" class="bg-slate-900 hover:bg-slate-950 text-slate-200 border border-slate-700 text-xs px-4 py-1.5 rounded-md transition font-medium">
-                    การตรวจสอบการเข้าถึง Log
+                    กรอกรหัสผ่านเพื่อเข้าถึง Log
                 </button>
             </div>
         </section>
@@ -224,11 +248,11 @@
             <div id="active-uses-content" class="bg-slate-800 border border-slate-700 rounded-lg p-3 hidden">
                 <div class="flex justify-between items-center mb-3 pb-2 border-b border-slate-700">
                     <h2 class="text-xs font-bold text-white flex items-center gap-1.5">
-                        <i class="fa-solid fa-satellite-dish text-red-500 animate-pulse"></i> รายการที่นำออกไปใช้งาน / พิกัด GPS
+                        <i class="fa-solid fa-satellite-dish text-red-500 animate-pulse"></i> รายการที่นำออกไปใช้งาน / พิกัด GPS เคส
                     </h2>
-                    <span class="text-[10px] bg-slate-900 text-slate-300 px-2 py-0.5 rounded border border-slate-700">Real-time</span>
+                    <span class="text-[10px] bg-slate-900 text-slate-300 px-2 py-0.5 rounded border border-slate-700">Realtime</span>
                 </div>
-                <div id="active-uses-list" class="space-y-2.5"></div>
+                <div id="active-uses-list" class="space-y-2"></div>
             </div>
 
             <div id="active-uses-lock" class="bg-slate-800 border border-slate-700 rounded-lg p-6 text-center space-y-3">
@@ -237,7 +261,7 @@
                 </div>
                 <div>
                     <h3 class="text-sm font-bold text-white">ต้องการสิทธิ์ผู้ดูแลระบบ (Admin)</h3>
-                    <p class="text-xs text-slate-400 mt-1">หัวข้อ "กำลังใช้งาน / พิกัดเคส" ถูกจำกัดการเข้าถึงเฉพาะ Admin หรือผู้ดูแลระบบเท่านั้น</p>
+                    <p class="text-xs text-slate-400 mt-1">หัวข้อ "กำลังใช้งาน / พิกัดเคส" ถูกจำกัดการเข้าถึงเฉพาะผู้ดูแลระบบ</p>
                 </div>
                 <button onclick="openAdminModal()" class="bg-gradient-to-r from-red-600 to-orange-600 hover:from-red-500 hover:to-orange-500 text-white text-xs px-5 py-2 rounded-md font-semibold transition shadow">
                     <i class="fa-solid fa-key mr-1"></i> กรอกรหัสผ่าน Admin เพื่อปลดล็อก
@@ -245,18 +269,18 @@
             </div>
         </section>
 
-        <!-- Tab 3: History -->
+        <!-- Tab 3: History Logs -->
         <section id="tab-history" class="hidden space-y-3">
             <div id="history-content" class="bg-slate-800 border border-slate-700 rounded-lg p-3 overflow-x-auto hidden">
                 <h2 class="text-xs font-bold text-white mb-3 flex items-center gap-1.5">
-                    <i class="fa-solid fa-clock-rotate-left text-amber-400"></i> ประวัติการเบิกและส่งคืน
+                    <i class="fa-solid fa-clock-rotate-left text-amber-400"></i> ประวัติ Log การเบิกและส่งคืน
                 </h2>
                 <table class="w-full text-left text-[11px]">
-                    <thead class="bg-slate-900 text-slate-400 border-b border-slate-700">
+                    <thead class="bg-slate-900 text-slate-400 border-b border-slate-700 font-medium">
                         <tr>
                             <th class="p-2">รายการ</th>
                             <th class="p-2">ผู้เบิก/ทีม</th>
-                            <th class="p-2">พิกัดสถานที่</th>
+                            <th class="p-2">สถานที่/พิกัด</th>
                             <th class="p-2">เวลาเบิก</th>
                             <th class="p-2">สถานะ</th>
                         </tr>
@@ -278,6 +302,7 @@
                 </button>
             </div>
         </section>
+
     </main>
 
     <!-- MODAL 1: Add/Edit Gear Item -->
@@ -299,8 +324,8 @@
                 </div>
 
                 <div>
-                    <label class="block font-medium text-slate-300 mb-1">รหัสรายการ (Code/ID)</label>
-                    <input type="text" id="gear-code" placeholder="เช่น #15 (ถ้าไม่ระบุจะรันให้อัตโนมัติ)" class="w-full bg-slate-900 border border-slate-700 rounded-md p-2 text-white focus:border-red-500 focus:outline-none">
+                    <label class="block font-medium text-slate-300 mb-1">ผู้ดำเนินการ *</label>
+                    <input type="text" id="gear-operator" required placeholder="เช่น นายกู้ภัย A (401), เจ้าหน้าที่สโตร์" class="w-full bg-slate-900 border border-slate-700 rounded-md p-2 text-white focus:border-red-500 focus:outline-none">
                 </div>
 
                 <div class="grid grid-cols-3 gap-2">
@@ -328,7 +353,7 @@
 
     <!-- MODAL 2: Checkout Gear -->
     <div id="checkout-modal" class="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center hidden p-3">
-        <div class="bg-slate-800 border border-slate-700 rounded-lg max-w-lg w-full p-4 shadow-2xl relative max-h-[90vh] overflow-y-auto">
+        <div class="bg-slate-800 border border-slate-700 rounded-lg max-w-md w-full p-4 shadow-2xl relative max-h-[90vh] overflow-y-auto">
             <button onclick="closeCheckoutModal()" class="absolute top-3 right-3 text-slate-400 hover:text-white text-base">
                 <i class="fa-solid fa-xmark"></i>
             </button>
@@ -380,7 +405,7 @@
                     </div>
                 </div>
 
-                <div class="pt-2 flex justify-end gap-2">
+                <div class="pt-2 flex justify-end gap-2 border-t border-slate-700">
                     <button type="button" onclick="closeCheckoutModal()" class="px-3 py-1.5 bg-slate-700 text-slate-300 rounded-md">ยกเลิก</button>
                     <button type="submit" class="px-4 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white font-medium rounded-md shadow">ยืนยันการเบิก</button>
                 </div>
@@ -412,7 +437,7 @@
     </div>
 
     <!-- Toast Notification -->
-    <div id="toast" class="fixed bottom-12 right-4 z-50 transform translate-y-20 opacity-0 transition-all duration-300 max-w-xs bg-slate-800 border border-slate-700 shadow-xl rounded-lg p-3 flex items-center gap-2 pointer-events-none">
+    <div id="toast" class="fixed bottom-6 right-4 z-50 transform translate-y-20 opacity-0 transition-all duration-300 max-w-xs bg-slate-800 border border-slate-700 shadow-xl rounded-lg p-3 flex items-center gap-2">
         <div id="toast-icon" class="w-6 h-6 rounded-full bg-emerald-500/20 text-emerald-400 flex items-center justify-center text-xs font-bold shrink-0">
             <i class="fa-solid fa-check"></i>
         </div>
@@ -423,63 +448,126 @@
     </div>
 
     <script>
-        // Global State Initializers
+        // Global Dynamic Memory State
         window.gears = [];
         window.activeUsages = [];
         window.historyLogs = [];
         window.isAdmin = false;
         const ADMIN_PIN = "1234";
 
-        // Seed default items if empty
-        const defaultGears = [
-            { id: '1', code: '#1', name: 'กล่องข้าว 1 ปอนด์ (1:500ใบ)', total: 21, allocated: 0, borrowed: 4 },
-            { id: '2', code: '#2', name: 'กล่องข้าว 3 ปอนด์ (1:150ใบ)', total: 9, allocated: 41, borrowed: 0 },
-            { id: '3', code: '#3', name: 'ข้าวสาร 5 kg. (เสาธงหงษ์)', total: 7, allocated: 0, borrowed: 0 },
-            { id: '4', code: '#4', name: 'ฝาพลาสติกขวด (1:40 ถุง)', total: 7, allocated: 0, borrowed: 0 },
-            { id: '5', code: '#5', name: 'ปลากระป๋อง (1:40 กระป๋อง)', total: 12, allocated: 0, borrowed: 0 },
-            { id: '6', code: '#6', name: 'ผักกาดจ้อ', total: 7, allocated: 21, borrowed: 14 },
-            { id: '7', code: '#7', name: 'หัวไช้เท้าดอง', total: 5, allocated: 0, borrowed: 0 },
-            { id: '8', code: '#8', name: 'ผักน้ำปลา', total: 17, allocated: 0, borrowed: 0 },
-            { id: '9', code: '#9', name: 'พริกไทย', total: 2, allocated: 0, borrowed: 0 },
-            { id: '10', code: '#10', name: 'น้ำตาลมิตรผล', total: 0, allocated: 2, borrowed: 0 },
-            { id: '11', code: '#11', name: 'ขวดปรุงรสรสลาบผง', total: 0, allocated: 0, borrowed: 2 },
-            { id: '12', code: '#12', name: 'ซึ้งนึ่ง (ใหญ่)', total: 1, allocated: 0, borrowed: 0 },
-            { id: '13', code: '#13', name: 'ชุดตัดถ่าง ไฮดรอลิก Holmatro', total: 2, allocated: 0, borrowed: 1 },
-            { id: '14', code: '#14', name: 'เรือยางกู้ภัยท้องแข็ง 30 HP', total: 3, allocated: 0, borrowed: 1 }
-        ];
-
-        // Local Storage Helpers
-        function loadLocalStorageData() {
+        // Local Storage Utilities for Guaranteed Working Saves
+        window.loadLocalStorageData = function() {
             try {
-                const localGears = localStorage.getItem('rescue_gears_data');
-                if (localGears) {
-                    window.gears = JSON.parse(localGears);
-                } else {
-                    window.gears = [...defaultGears];
-                    saveLocalStorageData();
+                const storedGears = localStorage.getItem('rescue_gears_data');
+                const storedUsages = localStorage.getItem('rescue_active_usages');
+                const storedHistory = localStorage.getItem('rescue_history_logs');
+
+                if (storedGears) window.gears = JSON.parse(storedGears);
+                if (storedUsages) window.activeUsages = JSON.parse(storedUsages);
+                if (storedHistory) window.historyLogs = JSON.parse(storedHistory);
+            } catch (e) {
+                console.warn("Local storage fallback initialization error", e);
+            }
+        };
+
+        window.saveLocalStorageData = function() {
+            try {
+                localStorage.setItem('rescue_gears_data', JSON.stringify(window.gears));
+                localStorage.setItem('rescue_active_usages', JSON.stringify(window.activeUsages));
+                localStorage.setItem('rescue_history_logs', JSON.stringify(window.historyLogs));
+            } catch (e) {
+                console.warn("Local storage save error", e);
+            }
+        };
+
+        window.onload = function() {
+            window.loadLocalStorageData();
+
+            if (window.initCloudSync) {
+                window.initCloudSync();
+            }
+
+            window.renderInventory();
+            window.renderActiveUses();
+            window.renderHistory();
+            window.updateStats();
+            window.updateAdminUI();
+        };
+
+        // Navigation Tabs
+        window.switchTab = function(tabName) {
+            ['inventory', 'active-uses', 'history'].forEach(t => {
+                const tabEl = document.getElementById(`tab-${t}`);
+                const btn = document.getElementById(`nav-${t}`);
+                if (tabEl) tabEl.classList.add('hidden');
+                if (btn) btn.className = 'whitespace-nowrap px-2.5 py-1 rounded-md font-medium transition flex items-center gap-1 text-slate-300 hover:bg-slate-700 shrink-0 text-[11px]';
+            });
+
+            const activeTab = document.getElementById(`tab-${tabName}`);
+            const activeBtn = document.getElementById(`nav-${tabName}`);
+            if (activeTab) activeTab.classList.remove('hidden');
+            if (activeBtn) activeBtn.className = 'whitespace-nowrap px-2.5 py-1 rounded-md font-medium transition flex items-center gap-1 bg-red-600 text-white shadow shrink-0 text-[11px]';
+
+            window.updateAdminUI();
+        };
+
+        // Admin Access Authentication
+        window.openAdminModal = function() {
+            if (window.isAdmin) {
+                if (confirm('ต้องการออกจากระบบ Admin หรือไม่?')) {
+                    window.isAdmin = false;
+                    window.updateAdminUI();
+                    window.showToast('ออกจากระบบ', 'ยกเลิกสิทธิ์ Admin แล้ว');
                 }
-
-                const localActive = localStorage.getItem('rescue_active_data');
-                if (localActive) window.activeUsages = JSON.parse(localActive);
-
-                const localHistory = localStorage.getItem('rescue_history_data');
-                if (localHistory) window.historyLogs = JSON.parse(localHistory);
-            } catch(e) {
-                console.warn("LocalStorage read error:", e);
-                window.gears = [...defaultGears];
+                return;
             }
-        }
+            document.getElementById('admin-passcode').value = '';
+            document.getElementById('admin-modal').classList.remove('hidden');
+            setTimeout(() => document.getElementById('admin-passcode').focus(), 100);
+        };
 
-        function saveLocalStorageData() {
-            try {
-                localStorage.setItem('rescue_gears_data', JSON.stringify(window.gears || []));
-                localStorage.setItem('rescue_active_data', JSON.stringify(window.activeUsages || []));
-                localStorage.setItem('rescue_history_data', JSON.stringify(window.historyLogs || []));
-            } catch(e) {
-                console.warn("LocalStorage save error:", e);
+        window.closeAdminModal = function() {
+            document.getElementById('admin-modal').classList.add('hidden');
+        };
+
+        window.verifyAdminPasscode = function(e) {
+            if (e) e.preventDefault();
+            const inputPin = document.getElementById('admin-passcode').value;
+            if (inputPin === ADMIN_PIN) {
+                window.isAdmin = true;
+                window.closeAdminModal();
+                window.updateAdminUI();
+                window.showToast('เข้าสู่ระบบสำเร็จ', 'ปลดล็อกสิทธิ์ผู้ดูแลระบบเรียบร้อย');
+            } else {
+                window.showToast('รหัสผ่านไม่ถูกต้อง', 'กรุณาลองใหม่อีกครั้ง');
+                document.getElementById('admin-passcode').value = '';
             }
-        }
-        window.saveLocalStorageData = saveLocalStorageData;
+        };
+
+        window.updateAdminUI = function() {
+            const btnLabel = document.getElementById('admin-btn-label');
+            const activeUsesContent = document.getElementById('active-uses-content');
+            const activeUsesLock = document.getElementById('active-uses-lock');
+            const historyContent = document.getElementById('history-content');
+            const historyLock = document.getElementById('history-lock');
+            const inventoryLogNotice = document.getElementById('inventory-log-notice');
+
+            if (window.isAdmin) {
+                if (btnLabel) btnLabel.innerText = "Admin Unlocked";
+                if (activeUsesContent) activeUsesContent.classList.remove('hidden');
+                if (activeUsesLock) activeUsesLock.classList.add('hidden');
+                if (historyContent) historyContent.classList.remove('hidden');
+                if (historyLock) historyLock.classList.add('hidden');
+                if (inventoryLogNotice) inventoryLogNotice.classList.add('hidden');
+            } else {
+                if (btnLabel) btnLabel.innerText = "Admin Login";
+                if (activeUsesContent) activeUsesContent.classList.add('hidden');
+                if (activeUsesLock) activeUsesLock.classList.remove('hidden');
+                if (historyContent) historyContent.classList.add('hidden');
+                if (historyLock) historyLock.classList.remove('hidden');
+                if (inventoryLogNotice) inventoryLogNotice.classList.remove('hidden');
+            }
+        };
 
         // UI Renderer: Inventory Table
         window.renderInventory = function() {
@@ -488,7 +576,7 @@
 
             const query = (document.getElementById('search-inventory')?.value || '').toLowerCase().trim();
             const filteredGears = window.gears.filter(g => 
-                (g.name || '').toLowerCase().includes(query) || (g.code || '').toLowerCase().includes(query)
+                (g.name || '').toLowerCase().includes(query) || (g.operator || g.code || '').toLowerCase().includes(query)
             );
 
             if (filteredGears.length === 0) {
@@ -506,7 +594,7 @@
                     <tr class="hover:bg-slate-700/30 transition border-b border-slate-700/40">
                         <td class="p-2.5 pl-3">
                             <div class="font-medium text-slate-100">${gear.name || ''}</div>
-                            <div class="text-[10px] text-slate-400 font-mono">${gear.code || ''}</div>
+                            <div class="text-[10px] text-amber-400/90 font-mono"><i class="fa-solid fa-user-gear text-[9px] mr-1"></i>ผู้ดำเนินการ: ${gear.operator || gear.code || '-'}</div>
                         </td>
                         <td class="p-2.5 text-center font-semibold text-slate-300">${total}</td>
                         <td class="p-2.5 text-center font-semibold text-emerald-400">${allocated}</td>
@@ -529,86 +617,76 @@
 
         // UI Renderer: Active Usages
         window.renderActiveUses = function() {
-            const container = document.getElementById('active-uses-list');
+            const list = document.getElementById('active-uses-list');
             const badge = document.getElementById('badge-active-count');
             if (badge) badge.innerText = window.activeUsages.length;
-            if (!container) return;
+            if (!list) return;
 
             if (window.activeUsages.length === 0) {
-                container.innerHTML = `<p class="text-slate-500 text-center py-4 text-xs">ไม่มีรายการที่กำลังถูกนำไปใช้งาน</p>`;
+                list.innerHTML = `<div class="text-center py-6 text-slate-500 text-xs">ไม่มีรายการที่นำออกไปใช้งานอยู่ขณะนี้</div>`;
                 return;
             }
 
-            container.innerHTML = window.activeUsages.map(item => `
-                <div class="bg-slate-900 border border-slate-700 rounded-lg p-2.5 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2">
-                    <div>
-                        <div class="font-bold text-slate-100 text-xs">${item.gearName} <span class="text-amber-400">(${item.quantity} รายการ)</span></div>
-                        <div class="text-[11px] text-slate-400 mt-0.5"><i class="fa-solid fa-user text-red-400 mr-1"></i>${item.borrowerName} (${item.borrowerPhone})</div>
-                        <div class="text-[10px] text-slate-400"><i class="fa-solid fa-location-dot text-emerald-400 mr-1"></i>${item.locationName}</div>
+            list.innerHTML = window.activeUsages.map(u => {
+                const hasGps = u.lat && u.lng;
+                const mapUrl = hasGps ? `https://www.google.com/maps?q=${u.lat},${u.lng}` : '#';
+
+                return `
+                    <div class="bg-slate-900 border border-slate-700/80 rounded-lg p-3 space-y-1.5 text-xs">
+                        <div class="flex justify-between items-start">
+                            <div>
+                                <span class="font-bold text-red-400 text-xs">${u.gearName || ''}</span>
+                                <span class="text-[10px] text-slate-400 ml-1.5">(จำนวน: ${u.quantity || 1})</span>
+                            </div>
+                            <button onclick="processReturn('${u.id}')" class="bg-amber-600 hover:bg-amber-500 text-white text-[10px] px-2 py-1 rounded font-medium shadow transition">
+                                <i class="fa-solid fa-rotate-left"></i> คืนสโตร์
+                            </button>
+                        </div>
+                        <div class="text-[11px] text-slate-300 space-y-0.5">
+                            <div><i class="fa-solid fa-user text-slate-500 w-4"></i> ผู้เบิก: <span class="font-medium text-white">${u.borrowerName || '-'}</span> (${u.borrowerPhone || '-'})</div>
+                            <div><i class="fa-solid fa-location-dot text-red-400 w-4"></i> สถานที่: ${u.locationName || '-'}</div>
+                        </div>
+                        ${hasGps ? `
+                            <a href="${mapUrl}" target="_blank" class="inline-flex items-center gap-1 text-[10px] bg-red-500/10 text-red-400 border border-red-500/30 px-2 py-0.5 rounded hover:bg-red-500/20">
+                                <i class="fa-solid fa-map-pin"></i> พิกัด Google Maps (${u.lat}, ${u.lng})
+                            </a>
+                        ` : ''}
                     </div>
-                    <button onclick="processReturn('${item.id}')" class="bg-emerald-600 hover:bg-emerald-500 text-white text-[11px] px-3 py-1 rounded shadow transition shrink-0 self-end sm:self-center">
-                        <i class="fa-solid fa-rotate-left mr-1"></i> รับคืนสโตร์
-                    </button>
-                </div>
-            `).join('');
+                `;
+            }).join('');
         };
 
-        // UI Renderer: History
+        // UI Renderer: History Logs
         window.renderHistory = function() {
             const tbody = document.getElementById('history-table-body');
             if (!tbody) return;
 
             if (window.historyLogs.length === 0) {
-                tbody.innerHTML = `<tr><td colspan="5" class="p-4 text-center text-slate-500">ไม่มีประวัติการทำรายการ</td></tr>`;
+                tbody.innerHTML = `<tr><td colspan="5" class="p-3 text-center text-slate-500">ยังไม่มีประวัติ Log</td></tr>`;
                 return;
             }
 
-            tbody.innerHTML = window.historyLogs.map(item => `
-                <tr class="border-b border-slate-700/40">
-                    <td class="p-2 font-medium text-slate-200">${item.gearName} (${item.quantity})</td>
-                    <td class="p-2 text-slate-300">${item.borrowerName}</td>
-                    <td class="p-2 text-slate-400">${item.locationName}</td>
-                    <td class="p-2 text-slate-400">${item.borrowTime ? new Date(item.borrowTime).toLocaleTimeString('th-TH', {hour:'2-digit', minute:'2-digit'}) : '-'}</td>
-                    <td class="p-2 text-emerald-400"><i class="fa-solid fa-circle-check mr-1"></i> คืนแล้ว</td>
+            tbody.innerHTML = window.historyLogs.map(h => `
+                <tr class="hover:bg-slate-700/30 transition border-b border-slate-700/40">
+                    <td class="p-2 font-medium text-slate-200">${h.gearName || ''} (${h.quantity || 1})</td>
+                    <td class="p-2 text-slate-300">${h.borrowerName || '-'}</td>
+                    <td class="p-2 text-slate-400">${h.locationName || '-'}</td>
+                    <td class="p-2 text-slate-400 text-[10px]">${h.borrowTime ? new Date(h.borrowTime).toLocaleDateString('th-TH') : '-'}</td>
+                    <td class="p-2"><span class="bg-emerald-500/20 text-emerald-400 text-[10px] px-1.5 py-0.5 rounded border border-emerald-500/30">คืนสโตร์แล้ว</span></td>
                 </tr>
             `).join('');
         };
 
-        // UI Stats Counter
+        // Update Stat Counters
         window.updateStats = function() {
-            const totalItemCount = window.gears.length;
-            const totalAllocated = window.gears.reduce((acc, g) => acc + (parseInt(g.allocated) || 0), 0);
-            const totalRemaining = window.gears.reduce((acc, g) => {
-                const tot = parseInt(g.total) || 0;
-                const alc = parseInt(g.allocated) || 0;
-                const bor = parseInt(g.borrowed) || 0;
-                return acc + Math.max(0, tot + alc - bor);
-            }, 0);
+            const total = window.gears.reduce((sum, g) => sum + (parseInt(g.total) || 0), 0);
+            const allocated = window.gears.reduce((sum, g) => sum + (parseInt(g.allocated) || 0), 0);
+            const borrowed = window.gears.reduce((sum, g) => sum + (parseInt(g.borrowed) || 0), 0);
+            const ready = Math.max(0, total + allocated - borrowed);
 
-            if (document.getElementById('stat-total-gear')) document.getElementById('stat-total-gear').innerText = totalItemCount;
-            if (document.getElementById('stat-allocated-gear')) document.getElementById('stat-allocated-gear').innerText = totalAllocated;
-            if (document.getElementById('stat-ready-gear')) document.getElementById('stat-ready-gear').innerText = totalRemaining;
-        };
-
-        // Navigation Controller
-        window.switchTab = function(tabName) {
-            ['inventory', 'active-uses', 'history'].forEach(t => {
-                const sec = document.getElementById(`tab-${t}`);
-                const nav = document.getElementById(`nav-${t}`);
-                if (sec) sec.classList.add('hidden');
-                if (nav) {
-                    nav.classList.remove('bg-red-600', 'text-white', 'shadow');
-                    nav.classList.add('text-slate-300');
-                }
-            });
-
-            const activeSec = document.getElementById(`tab-${tabName}`);
-            const activeNav = document.getElementById(`nav-${tabName}`);
-            if (activeSec) activeSec.classList.remove('hidden');
-            if (activeNav) {
-                activeNav.classList.add('bg-red-600', 'text-white', 'shadow');
-                activeNav.classList.remove('text-slate-300');
-            }
+            document.getElementById('stat-total-gear').innerText = total;
+            document.getElementById('stat-allocated-gear').innerText = allocated;
+            document.getElementById('stat-ready-gear').innerText = ready;
         };
 
         // Gear Item Modal Handlers
@@ -622,7 +700,7 @@
                 if (gear) {
                     document.getElementById('gear-id').value = gear.id;
                     document.getElementById('gear-name').value = gear.name || '';
-                    document.getElementById('gear-code').value = gear.code || '';
+                    document.getElementById('gear-operator').value = gear.operator || gear.code || '';
                     document.getElementById('gear-total').value = gear.total || 0;
                     document.getElementById('gear-allocated').value = gear.allocated || 0;
                     document.getElementById('gear-borrowed').value = gear.borrowed || 0;
@@ -640,22 +718,22 @@
             window.openGearModal(id);
         };
 
-        window.deleteGear = function(id) {
-            if (!confirm('คุณต้องการลบรายการนี้ใช่หรือไม่?')) return;
-            
+        window.deleteGear = async function(id) {
+            if (!confirm('ยืนยันการลบรายการนี้ใช่หรือไม่?')) return;
+
             window.gears = window.gears.filter(g => g.id !== id);
             window.saveLocalStorageData();
             window.renderInventory();
             window.updateStats();
+            window.showToast('ลบสำเร็จ', 'ลบรายการอุปกรณ์เรียบร้อย');
 
             try {
                 if (window.db && window.auth?.currentUser) {
-                    const docRef = window.doc(window.db, 'artifacts', window.appId, 'public', 'data', 'gears', id);
-                    window.deleteDoc(docRef);
+                    await window.deleteDoc(window.doc(window.db, 'artifacts', window.appId, 'public', 'data', 'gears', id));
                 }
-            } catch(e) { console.warn("Cloud delete skipped:", e); }
-
-            window.showToast('ลบรายการสำเร็จ', 'ลบอุปกรณ์เรียบร้อยแล้ว');
+            } catch (err) {
+                console.warn("Cloud delete deferred to local");
+            }
         };
 
         // Core Save Action (100% Reliable Guaranteed)
@@ -664,7 +742,7 @@
             
             const idInput = document.getElementById('gear-id').value;
             const nameInput = document.getElementById('gear-name').value.trim();
-            const codeInput = document.getElementById('gear-code').value.trim() || `#${window.gears.length + 1}`;
+            const operatorInput = document.getElementById('gear-operator').value.trim();
             const totalInput = parseInt(document.getElementById('gear-total').value) || 0;
             const allocatedInput = parseInt(document.getElementById('gear-allocated').value) || 0;
             const borrowedInput = parseInt(document.getElementById('gear-borrowed').value) || 0;
@@ -678,7 +756,8 @@
             const gearObj = {
                 id: targetId,
                 name: nameInput,
-                code: codeInput,
+                operator: operatorInput,
+                code: operatorInput,
                 total: totalInput,
                 allocated: allocatedInput,
                 borrowed: borrowedInput
@@ -704,7 +783,8 @@
                     const docRef = window.doc(window.db, 'artifacts', window.appId, 'public', 'data', 'gears', targetId);
                     await window.setDoc(docRef, {
                         name: nameInput,
-                        code: codeInput,
+                        operator: operatorInput,
+                        code: operatorInput,
                         total: totalInput,
                         allocated: allocatedInput,
                         borrowed: borrowedInput
@@ -715,12 +795,16 @@
             }
         };
 
-        // Checkout Modal & Processing
+        // Checkout Action
         window.openCheckoutModal = function() {
             const select = document.getElementById('checkout-gear-id');
             if (!select) return;
 
-            select.innerHTML = window.gears.map(g => `<option value="${g.id}">${g.code} - ${g.name} (คงเหลือ: ${Math.max(0, (g.total||0)+(g.allocated||0)-(g.borrowed||0))})</option>`).join('');
+            select.innerHTML = window.gears.map(g => {
+                const rem = Math.max(0, (g.total || 0) + (g.allocated || 0) - (g.borrowed || 0));
+                return `<option value="${g.id}">${g.name} (คงเหลือ: ${rem})</option>`;
+            }).join('');
+
             document.getElementById('checkout-form').reset();
             document.getElementById('checkout-modal').classList.remove('hidden');
         };
@@ -729,16 +813,32 @@
             document.getElementById('checkout-modal').classList.add('hidden');
         };
 
+        window.getCurrentLocation = function() {
+            if (navigator.geolocation) {
+                window.showToast('กำลังค้นหา', 'ดึงพิกัด GPS...');
+                navigator.geolocation.getCurrentPosition(pos => {
+                    document.getElementById('checkout-lat').value = pos.coords.latitude.toFixed(6);
+                    document.getElementById('checkout-lng').value = pos.coords.longitude.toFixed(6);
+                    window.showToast('สำเร็จ', 'ดึงพิกัด GPS เรียบร้อย');
+                }, () => {
+                    window.showToast('แจ้งเตือน', 'ไม่สามารถเข้าถึงตำแหน่ง GPS ได้');
+                });
+            }
+        };
+
         window.processCheckout = async function(e) {
             if (e) e.preventDefault();
             const gearId = document.getElementById('checkout-gear-id').value;
             const qty = parseInt(document.getElementById('checkout-qty').value) || 1;
             const gear = window.gears.find(g => g.id === gearId);
 
-            if (!gear) return;
+            if (!gear) {
+                window.showToast('ข้อผิดพลาด', 'กรุณาเลือกรายการอุปกรณ์');
+                return;
+            }
 
             const usageId = 'USG-' + Date.now();
-            const usageData = {
+            const usageObj = {
                 id: usageId,
                 gearId: gear.id,
                 gearName: gear.name,
@@ -752,9 +852,9 @@
             };
 
             gear.borrowed = (gear.borrowed || 0) + qty;
-            window.activeUsages.push(usageData);
-            window.saveLocalStorageData();
+            window.activeUsages.unshift(usageObj);
 
+            window.saveLocalStorageData();
             window.renderInventory();
             window.renderActiveUses();
             window.updateStats();
@@ -763,145 +863,87 @@
 
             try {
                 if (window.db && window.auth?.currentUser) {
-                    const gearDoc = window.doc(window.db, 'artifacts', window.appId, 'public', 'data', 'gears', gear.id);
-                    await window.updateDoc(gearDoc, { borrowed: gear.borrowed });
-                    const usageDoc = window.doc(window.db, 'artifacts', window.appId, 'public', 'data', 'activeUsages', usageId);
-                    await window.setDoc(usageDoc, usageData);
+                    await window.updateDoc(window.doc(window.db, 'artifacts', window.appId, 'public', 'data', 'gears', gear.id), { borrowed: gear.borrowed });
+                    await window.setDoc(window.doc(window.db, 'artifacts', window.appId, 'public', 'data', 'activeUsages', usageId), usageObj);
                 }
-            } catch(err) {
-                console.warn("Cloud sync skipped:", err);
+            } catch (err) {
+                console.warn("Background cloud checkout deferred to local");
             }
         };
 
+        // Return Action
         window.processReturn = async function(usageId) {
-            const usage = window.activeUsages.find(u => u.id === usageId);
-            if (!usage) return;
+            const usageIdx = window.activeUsages.findIndex(u => u.id === usageId);
+            if (usageIdx === -1) return;
+
+            const usage = window.activeUsages[usageIdx];
             const gear = window.gears.find(g => g.id === usage.gearId);
 
-            if (gear) gear.borrowed = Math.max(0, (gear.borrowed || 0) - usage.quantity);
+            if (gear) {
+                gear.borrowed = Math.max(0, (gear.borrowed || 0) - usage.quantity);
+            }
 
-            const historyItem = { ...usage, returnTime: new Date().toISOString() };
-            window.historyLogs.push(historyItem);
-            window.activeUsages = window.activeUsages.filter(u => u.id !== usageId);
+            const historyObj = {
+                ...usage,
+                id: 'HIS-' + Date.now(),
+                returnTime: new Date().toISOString()
+            };
+
+            window.activeUsages.splice(usageIdx, 1);
+            window.historyLogs.unshift(historyObj);
 
             window.saveLocalStorageData();
             window.renderInventory();
             window.renderActiveUses();
             window.renderHistory();
             window.updateStats();
-
-            window.showToast('รับคืนสำเร็จ', 'บันทึกคืนสโตร์เรียบร้อย');
+            window.showToast('รับคืนสำเร็จ', 'บันทึกการส่งคืนสโตร์เรียบร้อย');
 
             try {
                 if (window.db && window.auth?.currentUser) {
                     if (gear) {
-                        const gearDoc = window.doc(window.db, 'artifacts', window.appId, 'public', 'data', 'gears', gear.id);
-                        await window.updateDoc(gearDoc, { borrowed: gear.borrowed });
+                        await window.updateDoc(window.doc(window.db, 'artifacts', window.appId, 'public', 'data', 'gears', gear.id), { borrowed: gear.borrowed });
                     }
-                    const hisDoc = window.doc(window.db, 'artifacts', window.appId, 'public', 'data', 'historyLogs', 'HIS-' + Date.now());
-                    await window.setDoc(hisDoc, historyItem);
-                    const usgDoc = window.doc(window.db, 'artifacts', window.appId, 'public', 'data', 'activeUsages', usageId);
-                    await window.deleteDoc(usgDoc);
+                    await window.setDoc(window.doc(window.db, 'artifacts', window.appId, 'public', 'data', 'historyLogs', historyObj.id), historyObj);
+                    await window.deleteDoc(window.doc(window.db, 'artifacts', window.appId, 'public', 'data', 'activeUsages', usageId));
                 }
-            } catch(e) { console.warn("Cloud return sync skipped:", e); }
-        };
-
-        // Admin Lock & Login Controllers
-        window.openAdminModal = function() {
-            document.getElementById('admin-modal').classList.remove('hidden');
-        };
-
-        window.closeAdminModal = function() {
-            document.getElementById('admin-modal').classList.add('hidden');
-        };
-
-        window.verifyAdminPasscode = function(e) {
-            if (e) e.preventDefault();
-            const pin = document.getElementById('admin-passcode').value;
-            if (pin === ADMIN_PIN) {
-                window.isAdmin = true;
-                window.updateAdminUI();
-                window.closeAdminModal();
-                window.showToast('เข้าสู่ระบบสำเร็จ', 'ปลดล็อกสิทธิ์ Admin เรียบร้อยแล้ว');
-            } else {
-                window.showToast('รหัสผ่านไม่ถูกต้อง', 'กรุณาลองใหม่อีกครั้ง');
+            } catch (err) {
+                console.warn("Background cloud return deferred to local");
             }
         };
 
-        window.updateAdminUI = function() {
-            const btnLabel = document.getElementById('admin-btn-label');
-            const activeUsesContent = document.getElementById('active-uses-content');
-            const activeUsesLock = document.getElementById('active-uses-lock');
-            const historyContent = document.getElementById('history-content');
-            const historyLock = document.getElementById('history-lock');
-
-            if (window.isAdmin) {
-                if (btnLabel) btnLabel.innerText = "Admin Unlocked";
-                if (activeUsesContent) activeUsesContent.classList.remove('hidden');
-                if (activeUsesLock) activeUsesLock.classList.add('hidden');
-                if (historyContent) historyContent.classList.remove('hidden');
-                if (historyLock) historyLock.classList.add('hidden');
-            } else {
-                if (btnLabel) btnLabel.innerText = "Admin Login";
-                if (activeUsesContent) activeUsesContent.classList.add('hidden');
-                if (activeUsesLock) activeUsesLock.classList.remove('hidden');
-                if (historyContent) historyContent.classList.add('hidden');
-                if (historyLock) historyLock.classList.remove('hidden');
-            }
-        };
-
-        // Geolocation Helper
-        window.getCurrentLocation = function() {
-            if (navigator.geolocation) {
-                navigator.geolocation.getCurrentPosition(
-                    (pos) => {
-                        document.getElementById('checkout-lat').value = pos.coords.latitude.toFixed(6);
-                        document.getElementById('checkout-lng').value = pos.coords.longitude.toFixed(6);
-                        window.showToast('ดึงพิกัดสำเร็จ', 'บันทึก Latitude/Longitude เรียบร้อย');
-                    },
-                    (err) => {
-                        window.showToast('ข้อผิดพลาด', 'ไม่สามารถดึงพิกัด GPS ได้');
-                    }
-                );
-            }
-        };
-
-        // Export Helper
+        // Export CSV
         window.exportCSV = function() {
-            let csvContent = "data:text/csv;charset=utf-8,ID,Code,Name,Total,Allocated,Borrowed,Remaining\n";
+            let csv = "data:text/csv;charset=utf-8,\uFEFF";
+            csv += "ID,ชื่อรายการ,ผู้ดำเนินการ,จำนวนทั้งหมด,จัดนำส่ง,เบิกออกแล้ว,คงเหลือ\n";
+
             window.gears.forEach(g => {
-                const rem = Math.max(0, (parseInt(g.total)||0) + (parseInt(g.allocated)||0) - (parseInt(g.borrowed)||0));
-                csvContent += `${g.id},${g.code},"${g.name}",${g.total||0},${g.allocated||0},${g.borrowed||0},${rem}\n`;
+                const rem = Math.max(0, (g.total || 0) + (g.allocated || 0) - (g.borrowed || 0));
+                csv += `"${g.id}","${g.name || ''}","${g.operator || g.code || ''}",${g.total || 0},${g.allocated || 0},${g.borrowed || 0},${rem}\n`;
             });
-            const encodedUri = encodeURI(csvContent);
+
+            const encodedUri = encodeURI(csv);
             const link = document.createElement("a");
             link.setAttribute("href", encodedUri);
             link.setAttribute("download", `Rescue_Store_Report_${new Date().toISOString().slice(0,10)}.csv`);
             document.body.appendChild(link);
             link.click();
             document.body.removeChild(link);
-            window.showToast('ดาวน์โหลดแล้ว', 'ส่งออกไฟล์ CSV เรียบร้อย');
+            window.showToast('ส่งออก CSV', 'ดาวน์โหลดรายงานเรียบร้อยแล้ว');
         };
 
-        // Toast Helper
+        // Toast Alert Box
         window.showToast = function(title, message) {
             const toast = document.getElementById('toast');
             if (!toast) return;
+
             document.getElementById('toast-title').innerText = title;
             document.getElementById('toast-msg').innerText = message;
             toast.classList.remove('translate-y-20', 'opacity-0');
-            setTimeout(() => toast.classList.add('translate-y-20', 'opacity-0'), 3000);
-        };
 
-        // App Initialization
-        window.onload = function() {
-            loadLocalStorageData();
-            if (window.initCloudSync) window.initCloudSync();
-            window.renderInventory();
-            window.renderActiveUses();
-            window.renderHistory();
-            window.updateStats();
-            window.updateAdminUI();
+            setTimeout(() => {
+                toast.classList.add('translate-y-20', 'opacity-0');
+            }, 3000);
         };
     </script>
 </body>
