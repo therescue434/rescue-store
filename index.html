@@ -36,6 +36,9 @@
         window.auth = auth;
 
         async function initCloudSync() {
+            // Load local storage fallback data first
+            loadLocalStorageData();
+
             try {
                 if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
                     await signInWithCustomToken(auth, __initial_auth_token);
@@ -43,36 +46,81 @@
                     await signInAnonymously(auth);
                 }
             } catch (err) {
-                console.warn("Auth initialization fallback to anonymous", err);
+                console.warn("Auth initialization fallback to anonymous/local", err);
             }
 
             // Realtime Sync for Inventory
-            const gearColRef = collection(db, 'artifacts', appId, 'public', 'data', 'gears');
-            onSnapshot(gearColRef, (snapshot) => {
-                if (!snapshot.empty) {
-                    window.gears = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-                } else {
-                    seedDefaultData();
-                }
-                window.renderInventory();
-                window.updateStats();
-            }, (error) => console.error("Firestore Sync Error:", error));
+            try {
+                const gearColRef = collection(db, 'artifacts', appId, 'public', 'data', 'gears');
+                onSnapshot(gearColRef, (snapshot) => {
+                    if (!snapshot.empty) {
+                        window.gears = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                        saveLocalStorageData();
+                    } else if (window.gears.length === 0) {
+                        seedDefaultData();
+                    }
+                    window.renderInventory();
+                    window.updateStats();
+                }, (error) => {
+                    console.warn("Firestore Sync Error (using local state):", error);
+                    window.renderInventory();
+                    window.updateStats();
+                });
+            } catch(e) { console.warn("Firestore listener skipped:", e); }
 
             // Realtime Sync for Active Usages
-            const usageColRef = collection(db, 'artifacts', appId, 'public', 'data', 'activeUsages');
-            onSnapshot(usageColRef, (snapshot) => {
-                window.activeUsages = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-                window.renderActiveUses();
-                window.updateStats();
-            }, (error) => console.error("Active Usages Sync Error:", error));
+            try {
+                const usageColRef = collection(db, 'artifacts', appId, 'public', 'data', 'activeUsages');
+                onSnapshot(usageColRef, (snapshot) => {
+                    window.activeUsages = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                    saveLocalStorageData();
+                    window.renderActiveUses();
+                    window.updateStats();
+                }, (error) => {
+                    console.warn("Active Usages Sync Error (using local state):", error);
+                    window.renderActiveUses();
+                });
+            } catch(e) { console.warn("Firestore usage listener skipped:", e); }
 
             // Realtime Sync for History Logs
-            const historyColRef = collection(db, 'artifacts', appId, 'public', 'data', 'historyLogs');
-            onSnapshot(historyColRef, (snapshot) => {
-                window.historyLogs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-                window.renderHistory();
-            }, (error) => console.error("History Sync Error:", error));
+            try {
+                const historyColRef = collection(db, 'artifacts', appId, 'public', 'data', 'historyLogs');
+                onSnapshot(historyColRef, (snapshot) => {
+                    window.historyLogs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                    saveLocalStorageData();
+                    window.renderHistory();
+                }, (error) => {
+                    console.warn("History Sync Error (using local state):", error);
+                    window.renderHistory();
+                });
+            } catch(e) { console.warn("Firestore history listener skipped:", e); }
         }
+
+        function loadLocalStorageData() {
+            try {
+                const localGears = localStorage.getItem('rescue_gears_data');
+                if (localGears) window.gears = JSON.parse(localGears);
+
+                const localActive = localStorage.getItem('rescue_active_data');
+                if (localActive) window.activeUsages = JSON.parse(localActive);
+
+                const localHistory = localStorage.getItem('rescue_history_data');
+                if (localHistory) window.historyLogs = JSON.parse(localHistory);
+            } catch(e) {
+                console.warn("LocalStorage load error:", e);
+            }
+        }
+
+        function saveLocalStorageData() {
+            try {
+                localStorage.setItem('rescue_gears_data', JSON.stringify(window.gears || []));
+                localStorage.setItem('rescue_active_data', JSON.stringify(window.activeUsages || []));
+                localStorage.setItem('rescue_history_data', JSON.stringify(window.historyLogs || []));
+            } catch(e) {
+                console.warn("LocalStorage save error:", e);
+            }
+        }
+        window.saveLocalStorageData = saveLocalStorageData;
 
         async function seedDefaultData() {
             const defaultGears = [
@@ -92,10 +140,17 @@
                 { code: '#14', name: 'เรือยางกู้ภัยท้องแข็ง 30 HP', total: 3, allocated: 0, borrowed: 1 }
             ];
 
-            for (let i = 0; i < defaultGears.length; i++) {
-                const item = defaultGears[i];
-                const docId = (i + 1).toString();
-                await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'gears', docId), item);
+            window.gears = defaultGears.map((item, idx) => ({ id: (idx + 1).toString(), ...item }));
+            saveLocalStorageData();
+
+            try {
+                for (let i = 0; i < defaultGears.length; i++) {
+                    const item = defaultGears[i];
+                    const docId = (i + 1).toString();
+                    await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'gears', docId), item);
+                }
+            } catch(err) {
+                console.warn("Could not seed default data to cloud, saved locally", err);
             }
         }
 
@@ -434,303 +489,81 @@
     </div>
 
     <script>
-        window.gears = [];
-        window.activeUsages = [];
-        window.historyLogs = [];
+        window.gears = window.gears || [];
+        window.activeUsages = window.activeUsages || [];
+        window.historyLogs = window.historyLogs || [];
         window.isAdmin = false;
-        const ADMIN_PIN = "1234"; // รหัสผ่านสำหรับ Admin (สามารถเปลี่ยนตรงนี้ได้)
+        const ADMIN_PIN = "1234";
 
         window.onload = function() {
             if (window.initCloudSync) {
                 window.initCloudSync();
-            } else {
-                renderInventory();
-                renderActiveUses();
-                renderHistory();
-                updateStats();
             }
+            renderInventory();
+            renderActiveUses();
+            renderHistory();
+            updateStats();
             updateAdminUI();
         };
-
-        function switchTab(tabName) {
-            ['inventory', 'active-uses', 'history'].forEach(t => {
-                document.getElementById(`tab-${t}`).classList.add('hidden');
-                const btn = document.getElementById(`nav-${t}`);
-                if (btn) btn.className = 'px-3 py-1.5 rounded-md font-medium transition flex items-center gap-1.5 text-slate-300 hover:bg-slate-700 hover:text-white';
-            });
-
-            document.getElementById(`tab-${tabName}`).classList.remove('hidden');
-            const activeBtn = document.getElementById(`nav-${tabName}`);
-            if (activeBtn) activeBtn.className = 'px-3 py-1.5 rounded-md font-medium transition flex items-center gap-1.5 bg-red-600 text-white shadow';
-
-            updateAdminUI();
-        }
-
-        function openAdminModal() {
-            if (window.isAdmin) {
-                if (confirm('ต้องการออกจากระบบ Admin หรือไม่?')) {
-                    window.isAdmin = false;
-                    updateAdminUI();
-                    showToast('ออกจากระบบ', 'ยกเลิกสิทธิ์ Admin แล้ว');
-                }
-                return;
-            }
-            document.getElementById('admin-passcode').value = '';
-            document.getElementById('admin-modal').classList.remove('hidden');
-            setTimeout(() => document.getElementById('admin-passcode').focus(), 100);
-        }
-
-        function closeAdminModal() {
-            document.getElementById('admin-modal').classList.add('hidden');
-        }
-
-        function verifyAdminPasscode(e) {
-            e.preventDefault();
-            const inputPin = document.getElementById('admin-passcode').value;
-            if (inputPin === ADMIN_PIN) {
-                window.isAdmin = true;
-                closeAdminModal();
-                updateAdminUI();
-                showToast('เข้าสู่ระบบสำเร็จ', 'ปลดล็อกสิทธิ์ผู้ดูแลระบบเรียบร้อย');
-            } else {
-                showToast('รหัสผ่านไม่ถูกต้อง', 'กรุณาลองใหม่อีกครั้ง');
-                document.getElementById('admin-passcode').value = '';
-            }
-        }
-
-        function updateAdminUI() {
-            // Label status update
-            const label = document.getElementById('admin-btn-label');
-            const btn = document.getElementById('admin-status-btn');
-            if (window.isAdmin) {
-                label.innerText = 'Admin Active (Logout)';
-                btn.className = 'bg-emerald-900/80 hover:bg-emerald-900 text-emerald-300 border border-emerald-500/30 px-2 py-1 rounded text-[11px] font-medium transition flex items-center gap-1';
-            } else {
-                label.innerText = 'Admin Login';
-                btn.className = 'bg-slate-900/80 hover:bg-slate-900 text-amber-400 border border-amber-500/30 px-2 py-1 rounded text-[11px] font-medium transition flex items-center gap-1';
-            }
-
-            // Tab 2: Active Uses visibility
-            if (window.isAdmin) {
-                document.getElementById('active-uses-content').classList.remove('hidden');
-                document.getElementById('active-uses-lock').classList.add('hidden');
-            } else {
-                document.getElementById('active-uses-content').classList.add('hidden');
-                document.getElementById('active-uses-lock').classList.remove('hidden');
-            }
-
-            // Tab 3: History visibility
-            if (window.isAdmin) {
-                document.getElementById('history-content').classList.remove('hidden');
-                document.getElementById('history-lock').classList.add('hidden');
-            } else {
-                document.getElementById('history-content').classList.add('hidden');
-                document.getElementById('history-lock').classList.remove('hidden');
-            }
-        }
-
-        function updateStats() {
-            const total = gears.reduce((sum, g) => sum + (g.total || 0), 0);
-            const allocated = gears.reduce((sum, g) => sum + (g.allocated || 0), 0);
-            const borrowed = gears.reduce((sum, g) => sum + (g.borrowed || 0), 0);
-            const ready = Math.max(0, total + allocated - borrowed);
-
-            document.getElementById('stat-total-gear').innerText = total;
-            document.getElementById('stat-allocated-gear').innerText = allocated;
-            document.getElementById('stat-ready-gear').innerText = ready;
-        }
-
-        function renderInventory() {
-            const tbody = document.getElementById('inventory-table-body');
-            const search = (document.getElementById('search-inventory').value || '').toLowerCase();
-
-            const filtered = gears.filter(g => g.name.toLowerCase().includes(search) || (g.code || '').toLowerCase().includes(search));
-
-            if (filtered.length === 0) {
-                tbody.innerHTML = `<tr><td colspan="6" class="p-4 text-center text-slate-500">ไม่พบรายการวัตถุดิบ/อุปกรณ์</td></tr>`;
-                return;
-            }
-
-            tbody.innerHTML = filtered.map(g => {
-                const remaining = Math.max(0, (g.total || 0) + (g.allocated || 0) - (g.borrowed || 0));
-                return `
-                    <tr class="hover:bg-slate-700/30 transition">
-                        <td class="p-2.5 pl-3">
-                            <div class="font-medium text-slate-100">${g.name}</div>
-                            <div class="text-[10px] text-slate-500 font-mono">${g.code || '#'}</div>
-                        </td>
-                        <td class="p-2.5 text-center font-bold text-slate-200">${g.total || 0}</td>
-                        <td class="p-2.5 text-center font-bold text-emerald-400">${g.allocated || 0}</td>
-                        <td class="p-2.5 text-center font-bold text-amber-400">${g.borrowed || 0}</td>
-                        <td class="p-2.5 text-center">
-                            <span class="bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 font-bold px-2 py-0.5 rounded-full inline-block min-w-[28px]">
-                                ${remaining}
-                            </span>
-                        </td>
-                        <td class="p-2.5 text-center">
-                            <button onclick="editGear('${g.id}')" class="bg-emerald-600 hover:bg-emerald-500 text-white text-[11px] px-2 py-1 rounded font-medium shadow transition">
-                                +ปรับ
-                            </button>
-                        </td>
-                    </tr>
-                `;
-            }).join('');
-        }
-
-        function renderActiveUses() {
-            const list = document.getElementById('active-uses-list');
-            document.getElementById('badge-active-count').innerText = activeUsages.length;
-
-            if (activeUsages.length === 0) {
-                list.innerHTML = `<div class="text-center py-6 text-slate-500">ขณะนี้ไม่มีรายการที่ถูกเบิกออกไปใช้งาน</div>`;
-                return;
-            }
-
-            list.innerHTML = activeUsages.map(u => {
-                const hasGps = u.lat && u.lng;
-                const mapUrl = hasGps ? `https://www.google.com/maps?q=${u.lat},${u.lng}` : '#';
-                return `
-                    <div class="bg-slate-900 border border-slate-700/80 rounded-lg p-3 space-y-2">
-                        <div class="flex justify-between items-start">
-                            <div>
-                                <span class="text-xs font-bold text-red-400">${u.gearName}</span>
-                                <span class="text-[11px] text-slate-400 ml-1.5">(จำนวน: ${u.quantity})</span>
-                            </div>
-                            <button onclick="processReturn('${u.id}')" class="bg-amber-600 hover:bg-amber-500 text-white text-[10px] px-2 py-1 rounded font-medium shadow">
-                                <i class="fa-solid fa-rotate-left"></i> คืนสโตร์
-                            </button>
-                        </div>
-                        <div class="text-[11px] text-slate-300 space-y-0.5">
-                            <div><i class="fa-solid fa-user text-slate-500 w-4"></i> ผู้เบิก: <span class="font-medium text-white">${u.borrowerName}</span> (${u.borrowerPhone || '-'})</div>
-                            <div><i class="fa-solid fa-location-dot text-red-400 w-4"></i> สถานที่: ${u.locationName}</div>
-                        </div>
-                        ${hasGps ? `
-                            <a href="${mapUrl}" target="_blank" class="inline-flex items-center gap-1 text-[10px] bg-red-500/10 text-red-400 border border-red-500/30 px-2 py-0.5 rounded hover:bg-red-500/20">
-                                <i class="fa-solid fa-map-pin"></i> เปิดแผนที่ Google Maps (${u.lat}, ${u.lng})
-                            </a>
-                        ` : ''}
-                    </div>
-                `;
-            }).join('');
-        }
-
-        function renderHistory() {
-            const tbody = document.getElementById('history-table-body');
-            if (historyLogs.length === 0) {
-                tbody.innerHTML = `<tr><td colspan="5" class="p-3 text-center text-slate-500">ยังไม่มีประวัติการเบิก-คืน</td></tr>`;
-                return;
-            }
-
-            tbody.innerHTML = historyLogs.map(h => `
-                <tr class="hover:bg-slate-700/30 transition">
-                    <td class="p-2 font-medium text-slate-200">${h.gearName} (${h.quantity})</td>
-                    <td class="p-2 text-slate-300">${h.borrowerName}</td>
-                    <td class="p-2 text-slate-400">${h.locationName}</td>
-                    <td class="p-2 text-slate-400 text-[10px]">${new Date(h.borrowTime).toLocaleDateString('th-TH')}</td>
-                    <td class="p-2"><span class="bg-emerald-500/20 text-emerald-400 text-[10px] px-1.5 py-0.5 rounded">คืนแล้ว</span></td>
-                </tr>
-            `).join('');
-        }
-
-        function openGearModal() {
-            document.getElementById('gear-id').value = '';
-            document.getElementById('gear-form').reset();
-            document.getElementById('gear-modal-title').innerText = 'เพิ่มรายการอุปกรณ์/วัตถุดิบใหม่';
-            document.getElementById('gear-modal').classList.remove('hidden');
-        }
-
-        function closeGearModal() {
-            document.getElementById('gear-modal').classList.add('hidden');
-        }
-
-        function editGear(id) {
-            const gear = gears.find(g => g.id === id);
-            if (!gear) return;
-            document.getElementById('gear-id').value = gear.id;
-            document.getElementById('gear-name').value = gear.name;
-            document.getElementById('gear-code').value = gear.code || '';
-            document.getElementById('gear-total').value = gear.total || 0;
-            document.getElementById('gear-allocated').value = gear.allocated || 0;
-            document.getElementById('gear-borrowed').value = gear.borrowed || 0;
-            document.getElementById('gear-modal-title').innerText = 'แก้ไขรายการอุปกรณ์';
-            document.getElementById('gear-modal').classList.remove('hidden');
-        }
 
         async function saveGear(e) {
             e.preventDefault();
             const id = document.getElementById('gear-id').value;
-            const name = document.getElementById('gear-name').value;
-            const code = document.getElementById('gear-code').value || `#${window.gears.length + 1}`;
+            const name = document.getElementById('gear-name').value.trim();
+            const code = document.getElementById('gear-code').value.trim() || `#${window.gears.length + 1}`;
             const total = parseInt(document.getElementById('gear-total').value) || 0;
             const allocated = parseInt(document.getElementById('gear-allocated').value) || 0;
             const borrowed = parseInt(document.getElementById('gear-borrowed').value) || 0;
 
+            if (!name) {
+                showToast('ข้อผิดพลาด', 'กรุณาระบุชื่อรายการ');
+                return;
+            }
+
             const gearData = { name, code, total, allocated, borrowed };
+            const targetId = id || 'GEAR-' + Date.now();
 
-            let savedLocally = false;
+            // 1. Update In-Memory array & LocalStorage immediately
+            if (id) {
+                const idx = window.gears.findIndex(g => g.id === id);
+                if (idx !== -1) {
+                    window.gears[idx] = { ...window.gears[idx], ...gearData };
+                } else {
+                    window.gears.push({ id: targetId, ...gearData });
+                }
+            } else {
+                window.gears.push({ id: targetId, ...gearData });
+            }
 
-            // Attempt cloud sync first
+            if (window.saveLocalStorageData) {
+                window.saveLocalStorageData();
+            }
+
+            // Update UI immediately
+            renderInventory();
+            updateStats();
+
+            // 2. Background attempt to write to Firestore Cloud
             try {
                 if (window.db && window.auth?.currentUser) {
                     if (id) {
                         await updateDoc(doc(window.db, 'artifacts', window.appId, 'public', 'data', 'gears', id), gearData);
                     } else {
-                        const newId = Date.now().toString();
-                        await setDoc(doc(window.db, 'artifacts', window.appId, 'public', 'data', 'gears', newId), gearData);
+                        await setDoc(doc(window.db, 'artifacts', window.appId, 'public', 'data', 'gears', targetId), gearData);
                     }
-                } else {
-                    savedLocally = true;
                 }
             } catch (err) {
-                console.warn("Cloud save issue, falling back to local state:", err);
-                savedLocally = true;
+                console.warn("Cloud save failed, saved to browser memory:", err);
             }
 
-            // Fallback for local update if cloud fails or not authenticated
-            if (savedLocally || !window.db) {
-                if (id) {
-                    const idx = window.gears.findIndex(g => g.id === id);
-                    if (idx !== -1) {
-                        window.gears[idx] = { ...window.gears[idx], ...gearData };
-                    }
-                } else {
-                    const newId = Date.now().toString();
-                    window.gears.push({ id: newId, ...gearData });
-                }
-                renderInventory();
-                updateStats();
-            }
-
-            showToast('บันทึกสำเร็จ', 'อัปเดตข้อมูลเรียบร้อยแล้ว');
+            showToast('บันทึกสำเร็จ', 'อัปเดตข้อมูลรายการเรียบร้อย');
             closeGearModal();
-        }
-
-        function openCheckoutModal() {
-            const select = document.getElementById('checkout-gear-id');
-            select.innerHTML = window.gears.map(g => `<option value="${g.id}">${g.name} (คงเหลือ: ${Math.max(0, (g.total || 0) + (g.allocated || 0) - (g.borrowed || 0))})</option>`).join('');
-            document.getElementById('checkout-form').reset();
-            document.getElementById('checkout-modal').classList.remove('hidden');
-        }
-
-        function closeCheckoutModal() {
-            document.getElementById('checkout-modal').classList.add('hidden');
-        }
-
-        function getCurrentLocation() {
-            if (navigator.geolocation) {
-                showToast('กำลังค้นหา', 'ดึงพิกัด GPS...');
-                navigator.geolocation.getCurrentPosition(pos => {
-                    document.getElementById('checkout-lat').value = pos.coords.latitude.toFixed(6);
-                    document.getElementById('checkout-lng').value = pos.coords.longitude.toFixed(6);
-                    showToast('สำเร็จ', 'ดึงพิกัด GPS เรียบร้อย');
-                });
-            }
         }
 
         async function processCheckout(e) {
             e.preventDefault();
             const gearId = document.getElementById('checkout-gear-id').value;
-            const qty = parseInt(document.getElementById('checkout-qty').value);
+            const qty = parseInt(document.getElementById('checkout-qty').value) || 1;
             const gear = window.gears.find(g => g.id === gearId);
 
             if (!gear) return;
@@ -749,27 +582,23 @@
                 lng: document.getElementById('checkout-lng').value
             };
 
-            let processLocally = false;
+            // Update local memory and LocalStorage
+            gear.borrowed = (gear.borrowed || 0) + qty;
+            window.activeUsages.push(usageData);
+            if (window.saveLocalStorageData) window.saveLocalStorageData();
 
+            renderInventory();
+            renderActiveUses();
+            updateStats();
+
+            // Background cloud sync
             try {
                 if (window.db && window.auth?.currentUser) {
-                    const newBorrowed = (gear.borrowed || 0) + qty;
-                    await updateDoc(doc(window.db, 'artifacts', window.appId, 'public', 'data', 'gears', gear.id), { borrowed: newBorrowed });
+                    await updateDoc(doc(window.db, 'artifacts', window.appId, 'public', 'data', 'gears', gear.id), { borrowed: gear.borrowed });
                     await setDoc(doc(window.db, 'artifacts', window.appId, 'public', 'data', 'activeUsages', usageId), usageData);
-                } else {
-                    processLocally = true;
                 }
             } catch (err) {
-                console.warn("Cloud checkout issue, using local fallback:", err);
-                processLocally = true;
-            }
-
-            if (processLocally || !window.db) {
-                gear.borrowed = (gear.borrowed || 0) + qty;
-                window.activeUsages.push(usageData);
-                renderInventory();
-                renderActiveUses();
-                updateStats();
+                console.warn("Cloud checkout sync failed, kept in local memory:", err);
             }
 
             showToast('เบิกสำเร็จ', `ทำรายการเบิก ${gear.name} เรียบร้อยแล้ว`);
@@ -782,37 +611,32 @@
             if (!usage) return;
             const gear = window.gears.find(g => g.id === usage.gearId);
 
-            let processLocally = false;
+            // Update local memory & LocalStorage
+            if (gear) {
+                gear.borrowed = Math.max(0, (gear.borrowed || 0) - usage.quantity);
+            }
+            const historyItem = { ...usage, returnTime: new Date().toISOString() };
+            window.historyLogs.push(historyItem);
+            window.activeUsages = window.activeUsages.filter(u => u.id !== usageId);
+            if (window.saveLocalStorageData) window.saveLocalStorageData();
 
+            renderInventory();
+            renderActiveUses();
+            renderHistory();
+            updateStats();
+
+            // Background cloud sync
             try {
                 if (window.db && window.auth?.currentUser) {
                     if (gear) {
-                        const newBorrowed = Math.max(0, (gear.borrowed || 0) - usage.quantity);
-                        await updateDoc(doc(window.db, 'artifacts', window.appId, 'public', 'data', 'gears', gear.id), { borrowed: newBorrowed });
+                        await updateDoc(doc(window.db, 'artifacts', window.appId, 'public', 'data', 'gears', gear.id), { borrowed: gear.borrowed });
                     }
                     const historyId = 'HIS-' + Date.now();
-                    await setDoc(doc(window.db, 'artifacts', window.appId, 'public', 'data', 'historyLogs', historyId), {
-                        ...usage, returnTime: new Date().toISOString()
-                    });
+                    await setDoc(doc(window.db, 'artifacts', window.appId, 'public', 'data', 'historyLogs', historyId), historyItem);
                     await deleteDoc(doc(window.db, 'artifacts', window.appId, 'public', 'data', 'activeUsages', usageId));
-                } else {
-                    processLocally = true;
                 }
             } catch (err) {
-                console.warn("Cloud return issue, using local fallback:", err);
-                processLocally = true;
-            }
-
-            if (processLocally || !window.db) {
-                if (gear) {
-                    gear.borrowed = Math.max(0, (gear.borrowed || 0) - usage.quantity);
-                }
-                window.historyLogs.push({ ...usage, returnTime: new Date().toISOString() });
-                window.activeUsages = window.activeUsages.filter(u => u.id !== usageId);
-                renderInventory();
-                renderActiveUses();
-                renderHistory();
-                updateStats();
+                console.warn("Cloud return sync failed, kept in local memory:", err);
             }
 
             showToast('รับคืนสำเร็จ', 'บันทึกคืนสโตร์เรียบร้อย');
