@@ -1,0 +1,673 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ระบบจัดการสโตร์เบิก-จ่ายอุปกรณ์กู้ภัย (Rescue Gear Store)</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Font Awesome Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- Google Fonts - Kanit -->
+    <link href="https://fonts.googleapis.com/css2?family=Kanit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    
+    <!-- Firebase SDK (v11.6.1) for Realtime Multi-user Database -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, collection, doc, setDoc, updateDoc, deleteDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'rescue-store-app';
+        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {
+            apiKey: "demo-key",
+            authDomain: "demo.firebaseapp.com",
+            projectId: "demo-project",
+            storageBucket: "demo.appspot.com",
+            messagingSenderId: "123456",
+            appId: "1:123456:web:12345"
+        };
+
+        const app = initializeApp(firebaseConfig);
+        const db = getFirestore(app);
+        const auth = getAuth(app);
+
+        window.db = db;
+        window.appId = appId;
+        window.auth = auth;
+
+        async function initCloudSync() {
+            try {
+                if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                    await signInWithCustomToken(auth, __initial_auth_token);
+                } else {
+                    await signInAnonymously(auth);
+                }
+            } catch (err) {
+                console.warn("Auth initialization fallback to anonymous", err);
+            }
+
+            // Realtime Sync for Inventory
+            const gearColRef = collection(db, 'artifacts', appId, 'public', 'data', 'gears');
+            onSnapshot(gearColRef, (snapshot) => {
+                if (!snapshot.empty) {
+                    window.gears = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                } else {
+                    seedDefaultData();
+                }
+                window.renderInventory();
+                window.updateStats();
+            }, (error) => console.error("Firestore Sync Error:", error));
+
+            // Realtime Sync for Active Usages
+            const usageColRef = collection(db, 'artifacts', appId, 'public', 'data', 'activeUsages');
+            onSnapshot(usageColRef, (snapshot) => {
+                window.activeUsages = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                window.renderActiveUses();
+                window.updateStats();
+            }, (error) => console.error("Active Usages Sync Error:", error));
+
+            // Realtime Sync for History Logs
+            const historyColRef = collection(db, 'artifacts', appId, 'public', 'data', 'historyLogs');
+            onSnapshot(historyColRef, (snapshot) => {
+                window.historyLogs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                window.renderHistory();
+            }, (error) => console.error("History Sync Error:", error));
+        }
+
+        async function seedDefaultData() {
+            const defaultGears = [
+                { code: '#1', name: 'กล่องข้าว 1 ปอนด์ (1:500ใบ)', total: 21, allocated: 0, borrowed: 4 },
+                { code: '#2', name: 'กล่องข้าว 3 ปอนด์ (1:150ใบ)', total: 9, allocated: 41, borrowed: 0 },
+                { code: '#3', name: 'ข้าวสาร 5 kg. (เสาธงหงษ์)', total: 7, allocated: 0, borrowed: 0 },
+                { code: '#4', name: 'ฝาพลาสติกขวด (1:40 ถุง)', total: 7, allocated: 0, borrowed: 0 },
+                { code: '#5', name: 'ปลากระป๋อง (1:40 กระป๋อง)', total: 12, allocated: 0, borrowed: 0 },
+                { code: '#6', name: 'ผักกาดจ้อ', total: 7, allocated: 21, borrowed: 14 },
+                { code: '#7', name: 'หัวไช้เท้าดอง', total: 5, allocated: 0, borrowed: 0 },
+                { code: '#8', name: 'ผักน้ำปลา', total: 17, allocated: 0, borrowed: 0 },
+                { code: '#9', name: 'พริกไทย', total: 2, allocated: 0, borrowed: 0 },
+                { code: '#10', name: 'น้ำตาลมิตรผล', total: 0, allocated: 2, borrowed: 0 },
+                { code: '#11', name: 'ขวดปรุงรสรสลาบผง', total: 0, allocated: 0, borrowed: 2 },
+                { code: '#12', name: 'ซึ้งนึ่ง (ใหญ่)', total: 1, allocated: 0, borrowed: 0 },
+                { code: '#13', name: 'ชุดตัดถ่าง ไฮดรอลิก Holmatro', total: 2, allocated: 0, borrowed: 1 },
+                { code: '#14', name: 'เรือยางกู้ภัยท้องแข็ง 30 HP', total: 3, allocated: 0, borrowed: 1 }
+            ];
+
+            for (let i = 0; i < defaultGears.length; i++) {
+                const item = defaultGears[i];
+                const docId = (i + 1).toString();
+                await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'gears', docId), item);
+            }
+        }
+
+        window.initCloudSync = initCloudSync;
+    </script>
+    <style>
+        * { font-family: 'Kanit', sans-serif; }
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
+        ::-webkit-scrollbar-track { background: #1e293b; }
+        ::-webkit-scrollbar-thumb { background: #475569; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #64748b; }
+    </style>
+</head>
+<body class="bg-slate-900 text-slate-100 min-h-screen flex flex-col pb-12">
+
+    <header class="bg-gradient-to-r from-red-600 via-red-500 to-orange-600 shadow-md">
+        <div class="max-w-5xl mx-auto px-3 py-2.5 flex flex-col sm:flex-row items-center justify-between gap-2">
+            <div class="flex items-center gap-2.5">
+                <div class="w-10 h-10 rounded-full bg-white text-red-600 flex items-center justify-center font-bold shadow text-lg border-2 border-red-200">
+                    <i class="fa-solid fa-truck-medical"></i>
+                </div>
+                <div>
+                    <h1 class="text-base font-bold text-white leading-tight flex items-center gap-2">
+                        PohTeckTung Foundation
+                    </h1>
+                    <p class="text-xs text-red-100 opacity-90">คลังวัตถุดิบ/อุปกรณ์ โรงครัวฉุกเฉิน & สโตร์กู้ภัย 400</p>
+                </div>
+            </div>
+
+            <div class="flex items-center gap-2 w-full sm:w-auto justify-end">
+                <button onclick="exportCSV()" class="w-full sm:w-auto bg-slate-900/80 hover:bg-slate-900 text-white border border-red-400/40 text-xs px-3 py-1.5 rounded-full font-medium transition flex items-center justify-center gap-1.5 shadow-sm">
+                    <i class="fa-solid fa-file-csv text-emerald-400"></i> (Export รายงาน CSV)
+                </button>
+            </div>
+        </div>
+
+        <!-- Navigation Bar -->
+        <div class="bg-slate-800/90 border-t border-red-700/50 backdrop-blur">
+            <div class="max-w-5xl mx-auto px-3 flex justify-between items-center h-11 text-xs">
+                <div class="flex space-x-1">
+                    <button onclick="switchTab('inventory')" id="nav-inventory" class="px-3 py-1.5 rounded-md font-medium transition flex items-center gap-1.5 bg-red-600 text-white shadow">
+                        <i class="fa-solid fa-list-check"></i> ตารางรายการ
+                    </button>
+                    <button onclick="switchTab('active-uses')" id="nav-active-uses" class="px-3 py-1.5 rounded-md font-medium transition flex items-center gap-1.5 text-slate-300 hover:bg-slate-700 hover:text-white">
+                        <i class="fa-solid fa-location-dot text-red-400"></i> กำลังใช้งาน / พิกัดเคส
+                        <span id="badge-active-count" class="bg-red-500 text-white text-[10px] px-1.5 py-0.2 rounded-full">0</span>
+                    </button>
+                    <button onclick="switchTab('history')" id="nav-history" class="px-3 py-1.5 rounded-md font-medium transition flex items-center gap-1.5 text-slate-300 hover:bg-slate-700 hover:text-white">
+                        <i class="fa-solid fa-clock-rotate-left"></i> ประวัติ Log
+                    </button>
+                </div>
+
+                <button onclick="openCheckoutModal()" class="bg-gradient-to-r from-emerald-600 to-teal-500 hover:from-emerald-500 hover:to-teal-400 text-white px-3 py-1.5 rounded-md font-medium shadow text-xs flex items-center gap-1">
+                    <i class="fa-solid fa-hand-holding"></i> เบิกใช้งาน
+                </button>
+            </div>
+        </div>
+    </header>
+
+    <main class="max-w-5xl mx-auto px-2 sm:px-4 mt-4 flex-1 w-full space-y-3">
+
+        <!-- Search Bar -->
+        <div class="relative">
+            <i class="fa-solid fa-magnifying-glass absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-xs"></i>
+            <input type="text" id="search-inventory" oninput="renderInventory()" placeholder="ค้นหาชื่อวัตถุดิบ-อุปกรณ์..." class="w-full bg-slate-800 border border-slate-700 rounded-lg pl-8 pr-4 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-red-500 shadow-inner">
+        </div>
+
+        <!-- Stat Cards -->
+        <div class="grid grid-cols-3 gap-2 text-center">
+            <div class="bg-slate-800/90 border border-slate-700 rounded-lg p-2.5 shadow-sm">
+                <div id="stat-total-gear" class="text-xl font-bold text-slate-100">0</div>
+                <div class="text-[11px] text-slate-400 font-medium mt-0.5">รายการทั้งหมด</div>
+            </div>
+            <div class="bg-slate-800/90 border border-slate-700 rounded-lg p-2.5 shadow-sm">
+                <div id="stat-allocated-gear" class="text-xl font-bold text-amber-400">0</div>
+                <div class="text-[11px] text-slate-400 font-medium mt-0.5">จัดนำส่ง</div>
+            </div>
+            <div class="bg-slate-800/90 border border-slate-700 rounded-lg p-2.5 shadow-sm">
+                <div id="stat-ready-gear" class="text-xl font-bold text-emerald-400">0</div>
+                <div class="text-[11px] text-slate-400 font-medium mt-0.5">คงเหลือ</div>
+            </div>
+        </div>
+
+        <section id="tab-inventory" class="space-y-3">
+            <div class="bg-slate-800 border border-slate-700 rounded-lg overflow-hidden shadow">
+                <div class="overflow-x-auto">
+                    <table class="w-full text-left text-xs">
+                        <thead class="bg-slate-900/90 text-slate-400 border-b border-slate-700 font-medium">
+                            <tr>
+                                <th class="p-2.5 pl-3">ชื่อรายการ</th>
+                                <th class="p-2.5 text-center text-slate-300 w-12">ทั้งหมด</th>
+                                <th class="p-2.5 text-center text-emerald-400 w-12">จัดนำ</th>
+                                <th class="p-2.5 text-center text-amber-400 w-12">เบิกออก</th>
+                                <th class="p-2.5 text-center text-teal-300 w-14">คงเหลือ</th>
+                                <th class="p-2.5 text-center w-16">จัดการ</th>
+                            </tr>
+                        </thead>
+                        <tbody id="inventory-table-body" class="divide-y divide-slate-700/50">
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- Add New Item Button -->
+            <button onclick="openGearModal()" class="w-full py-2.5 bg-slate-800 hover:bg-slate-700/80 border border-dashed border-slate-600 rounded-lg text-xs font-semibold text-red-400 flex items-center justify-center gap-1.5 transition">
+                <i class="fa-solid fa-plus"></i> + เพิ่มรายการใหม่
+            </button>
+
+            <!-- Restricted Log Notice -->
+            <div class="bg-slate-800/60 border border-slate-700/60 rounded-lg p-4 text-center space-y-2">
+                <div class="text-amber-400 text-sm flex items-center justify-center gap-1.5 font-medium">
+                    <i class="fa-solid fa-lock"></i> ข้อมูล Log ถูกจำกัดสิทธิ์การเข้าถึง
+                </div>
+                <p class="text-[11px] text-slate-400">เงื่อนไขการจำกัดสิทธิ์สำหรับผู้ดูแลระบบ เพื่อบันทึกข้อมูลการใช้งาน</p>
+                <button onclick="switchTab('history')" class="bg-slate-900 hover:bg-slate-950 text-slate-200 border border-slate-700 text-xs px-4 py-1.5 rounded-md transition font-medium">
+                    การตรวจสอบการเข้าถึง Log
+                </button>
+            </div>
+        </section>
+
+        <section id="tab-active-uses" class="hidden space-y-3">
+            <div class="bg-slate-800 border border-slate-700 rounded-lg p-3">
+                <div class="flex justify-between items-center mb-3 pb-2 border-b border-slate-700">
+                    <h2 class="text-xs font-bold text-white flex items-center gap-1.5">
+                        <i class="fa-solid fa-satellite-dish text-red-500 animate-pulse"></i> รายการที่นำออกไปใช้งาน / พิกัด GPS
+                    </h2>
+                    <span class="text-[10px] bg-slate-900 text-slate-300 px-2 py-0.5 rounded border border-slate-700">Real-time</span>
+                </div>
+                <div id="active-uses-list" class="space-y-2.5"></div>
+            </div>
+        </section>
+
+        <section id="tab-history" class="hidden space-y-3">
+            <div class="bg-slate-800 border border-slate-700 rounded-lg p-3 overflow-x-auto">
+                <h2 class="text-xs font-bold text-white mb-3 flex items-center gap-1.5">
+                    <i class="fa-solid fa-clock-rotate-left text-amber-400"></i> ประวัติการเบิกและส่งคืน
+                </h2>
+                <table class="w-full text-left text-[11px]">
+                    <thead class="bg-slate-900 text-slate-400 border-b border-slate-700">
+                        <tr>
+                            <th class="p-2">รายการ</th>
+                            <th class="p-2">ผู้เบิก/ทีม</th>
+                            <th class="p-2">พิกัดสถานที่</th>
+                            <th class="p-2">เวลาเบิก</th>
+                            <th class="p-2">สถานะ</th>
+                        </tr>
+                    </thead>
+                    <tbody id="history-table-body" class="divide-y divide-slate-700/50"></tbody>
+                </table>
+            </div>
+        </section>
+
+    </main>
+
+    <div class="fixed bottom-0 left-0 right-0 bg-slate-900/95 border-t border-slate-800 z-30">
+        <div class="max-w-5xl mx-auto flex text-[11px] text-center font-medium">
+            <button onclick="switchTab('inventory')" id="mob-nav-inventory" class="flex-1 py-2 text-red-400 border-t-2 border-red-500 flex justify-center items-center gap-1">
+                <i class="fa-solid fa-boxes-stacked"></i> อัปเดตสถานะคงเหลือ
+            </button>
+            <button onclick="exportCSV()" class="flex-1 py-2 text-slate-400 flex justify-center items-center gap-1">
+                <i class="fa-solid fa-download"></i> ดาวน์โหลด Log (CSV)
+            </button>
+        </div>
+    </div>
+
+    <!-- MODAL 1: Gear Add/Edit -->
+    <div id="gear-modal" class="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center hidden p-3">
+        <div class="bg-slate-800 border border-slate-700 rounded-lg max-w-md w-full p-4 shadow-2xl relative">
+            <button onclick="closeGearModal()" class="absolute top-3 right-3 text-slate-400 hover:text-white text-base">
+                <i class="fa-solid fa-xmark"></i>
+            </button>
+            <h3 id="gear-modal-title" class="text-sm font-bold text-white mb-3 flex items-center gap-1.5">
+                <i class="fa-solid fa-box text-red-500"></i> จัดการรายการอุปกรณ์/วัตถุดิบ
+            </h3>
+            
+            <form id="gear-form" onsubmit="saveGear(event)" class="space-y-3 text-xs">
+                <input type="hidden" id="gear-id">
+                <div>
+                    <label class="block font-medium text-slate-300 mb-1">ชื่อรายการอุปกรณ์ / วัตถุดิบ *</label>
+                    <input type="text" id="gear-name" required placeholder="เช่น กล่องข้าว 1 ปอนด์, เชือกกู้ภัย" class="w-full bg-slate-900 border border-slate-700 rounded-md p-2 text-white focus:border-red-500 focus:outline-none">
+                </div>
+
+                <div class="grid grid-cols-2 gap-2">
+                    <div>
+                        <label class="block font-medium text-slate-300 mb-1">รหัสรายการ/โค้ด</label>
+                        <input type="text" id="gear-code" placeholder="#01" class="w-full bg-slate-900 border border-slate-700 rounded-md p-2 text-white focus:border-red-500 focus:outline-none">
+                    </div>
+                    <div>
+                        <label class="block font-medium text-slate-300 mb-1">จำนวนทั้งหมด *</label>
+                        <input type="number" id="gear-total" min="0" value="0" required class="w-full bg-slate-900 border border-slate-700 rounded-md p-2 text-white focus:border-red-500 focus:outline-none">
+                    </div>
+                </div>
+
+                <div class="grid grid-cols-2 gap-2">
+                    <div>
+                        <label class="block font-medium text-slate-300 mb-1">จำนวนจัดนำส่ง</label>
+                        <input type="number" id="gear-allocated" min="0" value="0" class="w-full bg-slate-900 border border-slate-700 rounded-md p-2 text-white focus:border-red-500 focus:outline-none">
+                    </div>
+                    <div>
+                        <label class="block font-medium text-slate-300 mb-1">จำนวนเบิกออก</label>
+                        <input type="number" id="gear-borrowed" min="0" value="0" class="w-full bg-slate-900 border border-slate-700 rounded-md p-2 text-white focus:border-red-500 focus:outline-none">
+                    </div>
+                </div>
+
+                <div class="pt-2 flex justify-end gap-2">
+                    <button type="button" onclick="closeGearModal()" class="px-3 py-1.5 bg-slate-700 text-slate-300 rounded-md">ยกเลิก</button>
+                    <button type="submit" class="px-4 py-1.5 bg-red-600 hover:bg-red-500 text-white font-medium rounded-md shadow">บันทึก</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- MODAL 2: Checkout Gear -->
+    <div id="checkout-modal" class="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center hidden p-3">
+        <div class="bg-slate-800 border border-slate-700 rounded-lg max-w-lg w-full p-4 shadow-2xl relative max-h-[90vh] overflow-y-auto">
+            <button onclick="closeCheckoutModal()" class="absolute top-3 right-3 text-slate-400 hover:text-white text-base">
+                <i class="fa-solid fa-xmark"></i>
+            </button>
+            <h3 class="text-sm font-bold text-white mb-2 flex items-center gap-1.5">
+                <i class="fa-solid fa-clipboard-check text-emerald-400"></i> ทำรายการเบิกอุปกรณ์/วัตถุดิบ
+            </h3>
+
+            <form id="checkout-form" onsubmit="processCheckout(event)" class="space-y-3 text-xs">
+                <div>
+                    <label class="block font-medium text-slate-300 mb-1">เลือกรายการที่ต้องการเบิก *</label>
+                    <select id="checkout-gear-id" required class="w-full bg-slate-900 border border-slate-700 rounded-md p-2 text-white focus:border-red-500 focus:outline-none"></select>
+                </div>
+
+                <div class="grid grid-cols-2 gap-2">
+                    <div>
+                        <label class="block font-medium text-slate-300 mb-1">จำนวนที่เบิก *</label>
+                        <input type="number" id="checkout-qty" min="1" value="1" required class="w-full bg-slate-900 border border-slate-700 rounded-md p-2 text-white focus:border-red-500 focus:outline-none">
+                    </div>
+                    <div>
+                        <label class="block font-medium text-slate-300 mb-1">ความเร่งด่วน</label>
+                        <select id="checkout-urgency" class="w-full bg-slate-900 border border-slate-700 rounded-md p-2 text-white focus:border-red-500 focus:outline-none">
+                            <option value="NORMAL">ปกติ</option>
+                            <option value="URGENT">ด่วน</option>
+                            <option value="EMERGENCY">ฉุกเฉินวิกฤต</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div class="border-t border-slate-700/80 pt-2 space-y-2">
+                    <p class="font-semibold text-slate-200">ข้อมูลผู้เบิก / ทีมปฏิบัติการ</p>
+                    <div class="grid grid-cols-2 gap-2">
+                        <input type="text" id="checkout-borrower" required placeholder="ชื่อ-นามเรียกขาน (เช่น กู้ภัย 401)" class="w-full bg-slate-900 border border-slate-700 rounded-md p-2 text-white focus:border-red-500 focus:outline-none">
+                        <input type="tel" id="checkout-phone" required placeholder="เบอร์โทรศัพท์" class="w-full bg-slate-900 border border-slate-700 rounded-md p-2 text-white focus:border-red-500 focus:outline-none">
+                    </div>
+                </div>
+
+                <div class="border-t border-slate-700/80 pt-2 space-y-2">
+                    <div class="flex justify-between items-center">
+                        <p class="font-semibold text-slate-200">สถานที่นำไปใช้ / พิกัด GPS เคส</p>
+                        <button type="button" onclick="getCurrentLocation()" class="text-[10px] bg-red-500/20 text-red-400 border border-red-500/30 px-2 py-0.5 rounded hover:bg-red-500/30">
+                            <i class="fa-solid fa-crosshairs"></i> ดึง GPS ปัจจุบัน
+                        </button>
+                    </div>
+                    <input type="text" id="checkout-location-name" required placeholder="ระบุสถานที่เกิดเหตุ/จุดแจกจ่าย" class="w-full bg-slate-900 border border-slate-700 rounded-md p-2 text-white focus:border-red-500 focus:outline-none">
+                    
+                    <div class="grid grid-cols-2 gap-2">
+                        <input type="text" id="checkout-lat" placeholder="Latitude (เช่น 13.7563)" class="w-full bg-slate-900 border border-slate-700 rounded-md p-2 text-white focus:border-red-500 focus:outline-none">
+                        <input type="text" id="checkout-lng" placeholder="Longitude (เช่น 100.5018)" class="w-full bg-slate-900 border border-slate-700 rounded-md p-2 text-white focus:border-red-500 focus:outline-none">
+                    </div>
+                </div>
+
+                <div class="pt-2 flex justify-end gap-2">
+                    <button type="button" onclick="closeCheckoutModal()" class="px-3 py-1.5 bg-slate-700 text-slate-300 rounded-md">ยกเลิก</button>
+                    <button type="submit" class="px-4 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white font-medium rounded-md shadow">ยืนยันการเบิก</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Toast Alert Notification -->
+    <div id="toast" class="fixed bottom-12 right-4 z-50 transform translate-y-20 opacity-0 transition-all duration-300 max-w-xs bg-slate-800 border border-slate-700 shadow-xl rounded-lg p-3 flex items-center gap-2">
+        <div id="toast-icon" class="w-6 h-6 rounded-full bg-emerald-500/20 text-emerald-400 flex items-center justify-center text-xs font-bold">
+            <i class="fa-solid fa-check"></i>
+        </div>
+        <div>
+            <p id="toast-title" class="text-xs font-bold text-white">สำเร็จ</p>
+            <p id="toast-msg" class="text-[11px] text-slate-300">ทำรายการเรียบร้อยแล้ว</p>
+        </div>
+    </div>
+
+    <script>
+        window.gears = [];
+        window.activeUsages = [];
+        window.historyLogs = [];
+
+        window.onload = function() {
+            if (window.initCloudSync) {
+                window.initCloudSync();
+            } else {
+                renderInventory();
+                renderActiveUses();
+                renderHistory();
+                updateStats();
+            }
+        };
+
+        function switchTab(tabName) {
+            ['inventory', 'active-uses', 'history'].forEach(t => {
+                document.getElementById(`tab-${t}`).classList.add('hidden');
+                const btn = document.getElementById(`nav-${t}`);
+                if (btn) btn.className = 'px-3 py-1.5 rounded-md font-medium transition flex items-center gap-1.5 text-slate-300 hover:bg-slate-700 hover:text-white';
+            });
+
+            document.getElementById(`tab-${tabName}`).classList.remove('hidden');
+            const activeBtn = document.getElementById(`nav-${tabName}`);
+            if (activeBtn) activeBtn.className = 'px-3 py-1.5 rounded-md font-medium transition flex items-center gap-1.5 bg-red-600 text-white shadow';
+        }
+
+        function updateStats() {
+            const total = gears.reduce((sum, g) => sum + (g.total || 0), 0);
+            const allocated = gears.reduce((sum, g) => sum + (g.allocated || 0), 0);
+            const borrowed = gears.reduce((sum, g) => sum + (g.borrowed || 0), 0);
+            const ready = Math.max(0, total + allocated - borrowed);
+
+            document.getElementById('stat-total-gear').innerText = total;
+            document.getElementById('stat-allocated-gear').innerText = allocated;
+            document.getElementById('stat-ready-gear').innerText = ready;
+        }
+
+        function renderInventory() {
+            const tbody = document.getElementById('inventory-table-body');
+            const search = (document.getElementById('search-inventory').value || '').toLowerCase();
+
+            const filtered = gears.filter(g => g.name.toLowerCase().includes(search) || (g.code || '').toLowerCase().includes(search));
+
+            if (filtered.length === 0) {
+                tbody.innerHTML = `<tr><td colspan="6" class="p-4 text-center text-slate-500">ไม่พบรายการวัตถุดิบ/อุปกรณ์</td></tr>`;
+                return;
+            }
+
+            tbody.innerHTML = filtered.map(g => {
+                const remaining = Math.max(0, (g.total || 0) + (g.allocated || 0) - (g.borrowed || 0));
+                return `
+                    <tr class="hover:bg-slate-700/30 transition">
+                        <td class="p-2.5 pl-3">
+                            <div class="font-medium text-slate-100">${g.name}</div>
+                            <div class="text-[10px] text-slate-500 font-mono">${g.code || '#'}</div>
+                        </td>
+                        <td class="p-2.5 text-center font-bold text-slate-200">${g.total || 0}</td>
+                        <td class="p-2.5 text-center font-bold text-emerald-400">${g.allocated || 0}</td>
+                        <td class="p-2.5 text-center font-bold text-amber-400">${g.borrowed || 0}</td>
+                        <td class="p-2.5 text-center">
+                            <span class="bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 font-bold px-2 py-0.5 rounded-full inline-block min-w-[28px]">
+                                ${remaining}
+                            </span>
+                        </td>
+                        <td class="p-2.5 text-center">
+                            <button onclick="editGear('${g.id}')" class="bg-emerald-600 hover:bg-emerald-500 text-white text-[11px] px-2 py-1 rounded font-medium shadow transition">
+                                +ปรับ
+                            </button>
+                        </td>
+                    </tr>
+                `;
+            }).join('');
+        }
+
+        function renderActiveUses() {
+            const list = document.getElementById('active-uses-list');
+            document.getElementById('badge-active-count').innerText = activeUsages.length;
+
+            if (activeUsages.length === 0) {
+                list.innerHTML = `<div class="text-center py-6 text-slate-500">ขณะนี้ไม่มีรายการที่ถูกเบิกออกไปใช้งาน</div>`;
+                return;
+            }
+
+            list.innerHTML = activeUsages.map(u => {
+                const hasGps = u.lat && u.lng;
+                const mapUrl = hasGps ? `https://www.google.com/maps?q=${u.lat},${u.lng}` : '#';
+                return `
+                    <div class="bg-slate-900 border border-slate-700/80 rounded-lg p-3 space-y-2">
+                        <div class="flex justify-between items-start">
+                            <div>
+                                <span class="text-xs font-bold text-red-400">${u.gearName}</span>
+                                <span class="text-[11px] text-slate-400 ml-1.5">(จำนวน: ${u.quantity})</span>
+                            </div>
+                            <button onclick="processReturn('${u.id}')" class="bg-amber-600 hover:bg-amber-500 text-white text-[10px] px-2 py-1 rounded font-medium shadow">
+                                <i class="fa-solid fa-rotate-left"></i> คืนสโตร์
+                            </button>
+                        </div>
+                        <div class="text-[11px] text-slate-300 space-y-0.5">
+                            <div><i class="fa-solid fa-user text-slate-500 w-4"></i> ผู้เบิก: <span class="font-medium text-white">${u.borrowerName}</span> (${u.borrowerPhone || '-'})</div>
+                            <div><i class="fa-solid fa-location-dot text-red-400 w-4"></i> สถานที่: ${u.locationName}</div>
+                        </div>
+                        ${hasGps ? `
+                            <a href="${mapUrl}" target="_blank" class="inline-flex items-center gap-1 text-[10px] bg-red-500/10 text-red-400 border border-red-500/30 px-2 py-0.5 rounded hover:bg-red-500/20">
+                                <i class="fa-solid fa-map-pin"></i> เปิดแผนที่ Google Maps (${u.lat}, ${u.lng})
+                            </a>
+                        ` : ''}
+                    </div>
+                `;
+            }).join('');
+        }
+
+        function renderHistory() {
+            const tbody = document.getElementById('history-table-body');
+            if (historyLogs.length === 0) {
+                tbody.innerHTML = `<tr><td colspan="5" class="p-3 text-center text-slate-500">ยังไม่มีประวัติการเบิก-คืน</td></tr>`;
+                return;
+            }
+
+            tbody.innerHTML = historyLogs.map(h => `
+                <tr class="hover:bg-slate-700/30 transition">
+                    <td class="p-2 font-medium text-slate-200">${h.gearName} (${h.quantity})</td>
+                    <td class="p-2 text-slate-300">${h.borrowerName}</td>
+                    <td class="p-2 text-slate-400">${h.locationName}</td>
+                    <td class="p-2 text-slate-400 text-[10px]">${new Date(h.borrowTime).toLocaleDateString('th-TH')}</td>
+                    <td class="p-2"><span class="bg-emerald-500/20 text-emerald-400 text-[10px] px-1.5 py-0.5 rounded">คืนแล้ว</span></td>
+                </tr>
+            `).join('');
+        }
+
+        function openGearModal() {
+            document.getElementById('gear-id').value = '';
+            document.getElementById('gear-form').reset();
+            document.getElementById('gear-modal-title').innerText = 'เพิ่มรายการอุปกรณ์/วัตถุดิบใหม่';
+            document.getElementById('gear-modal').classList.remove('hidden');
+        }
+
+        function closeGearModal() {
+            document.getElementById('gear-modal').classList.add('hidden');
+        }
+
+        function editGear(id) {
+            const gear = gears.find(g => g.id === id);
+            if (!gear) return;
+            document.getElementById('gear-id').value = gear.id;
+            document.getElementById('gear-name').value = gear.name;
+            document.getElementById('gear-code').value = gear.code || '';
+            document.getElementById('gear-total').value = gear.total || 0;
+            document.getElementById('gear-allocated').value = gear.allocated || 0;
+            document.getElementById('gear-borrowed').value = gear.borrowed || 0;
+            document.getElementById('gear-modal-title').innerText = 'แก้ไขรายการอุปกรณ์';
+            document.getElementById('gear-modal').classList.remove('hidden');
+        }
+
+        async function saveGear(e) {
+            e.preventDefault();
+            const id = document.getElementById('gear-id').value;
+            const name = document.getElementById('gear-name').value;
+            const code = document.getElementById('gear-code').value || `#${window.gears.length + 1}`;
+            const total = parseInt(document.getElementById('gear-total').value) || 0;
+            const allocated = parseInt(document.getElementById('gear-allocated').value) || 0;
+            const borrowed = parseInt(document.getElementById('gear-borrowed').value) || 0;
+
+            const gearData = { name, code, total, allocated, borrowed };
+
+            try {
+                if (window.db) {
+                    if (id) {
+                        await updateDoc(doc(window.db, 'artifacts', window.appId, 'public', 'data', 'gears', id), gearData);
+                    } else {
+                        const newId = Date.now().toString();
+                        await setDoc(doc(window.db, 'artifacts', window.appId, 'public', 'data', 'gears', newId), gearData);
+                    }
+                }
+                showToast('บันทึกสำเร็จ', 'อัปเดตข้อมูลเรียบร้อยแล้ว');
+            } catch (err) {
+                console.error("Save gear error:", err);
+                showToast('ข้อผิดพลาด', 'ไม่สามารถบันทึกข้อมูลได้');
+            }
+            closeGearModal();
+        }
+
+        function openCheckoutModal() {
+            const select = document.getElementById('checkout-gear-id');
+            select.innerHTML = window.gears.map(g => `<option value="${g.id}">${g.name} (คงเหลือ: ${Math.max(0, (g.total || 0) + (g.allocated || 0) - (g.borrowed || 0))})</option>`).join('');
+            document.getElementById('checkout-form').reset();
+            document.getElementById('checkout-modal').classList.remove('hidden');
+        }
+
+        function closeCheckoutModal() {
+            document.getElementById('checkout-modal').classList.add('hidden');
+        }
+
+        function getCurrentLocation() {
+            if (navigator.geolocation) {
+                showToast('กำลังค้นหา', 'ดึงพิกัด GPS...');
+                navigator.geolocation.getCurrentPosition(pos => {
+                    document.getElementById('checkout-lat').value = pos.coords.latitude.toFixed(6);
+                    document.getElementById('checkout-lng').value = pos.coords.longitude.toFixed(6);
+                    showToast('สำเร็จ', 'ดึงพิกัด GPS เรียบร้อย');
+                });
+            }
+        }
+
+        async function processCheckout(e) {
+            e.preventDefault();
+            const gearId = document.getElementById('checkout-gear-id').value;
+            const qty = parseInt(document.getElementById('checkout-qty').value);
+            const gear = window.gears.find(g => g.id === gearId);
+
+            if (!gear) return;
+
+            const usageId = 'USG-' + Date.now();
+            const usageData = {
+                gearId: gear.id,
+                gearName: gear.name,
+                borrowerName: document.getElementById('checkout-borrower').value,
+                borrowerPhone: document.getElementById('checkout-phone').value,
+                quantity: qty,
+                borrowTime: new Date().toISOString(),
+                locationName: document.getElementById('checkout-location-name').value,
+                lat: document.getElementById('checkout-lat').value,
+                lng: document.getElementById('checkout-lng').value
+            };
+
+            try {
+                if (window.db) {
+                    const newBorrowed = (gear.borrowed || 0) + qty;
+                    await updateDoc(doc(window.db, 'artifacts', window.appId, 'public', 'data', 'gears', gear.id), { borrowed: newBorrowed });
+                    await setDoc(doc(window.db, 'artifacts', window.appId, 'public', 'data', 'activeUsages', usageId), usageData);
+                }
+                showToast('เบิกสำเร็จ', `ทำรายการเบิก ${gear.name} เรียบร้อยแล้ว`);
+                switchTab('active-uses');
+            } catch (err) {
+                console.error("Checkout error:", err);
+            }
+            closeCheckoutModal();
+        }
+
+        async function processReturn(usageId) {
+            const usage = window.activeUsages.find(u => u.id === usageId);
+            if (!usage) return;
+            const gear = window.gears.find(g => g.id === usage.gearId);
+
+            try {
+                if (window.db) {
+                    if (gear) {
+                        const newBorrowed = Math.max(0, (gear.borrowed || 0) - usage.quantity);
+                        await updateDoc(doc(window.db, 'artifacts', window.appId, 'public', 'data', 'gears', gear.id), { borrowed: newBorrowed });
+                    }
+                    const historyId = 'HIS-' + Date.now();
+                    await setDoc(doc(window.db, 'artifacts', window.appId, 'public', 'data', 'historyLogs', historyId), {
+                        ...usage, returnTime: new Date().toISOString()
+                    });
+                    await deleteDoc(doc(window.db, 'artifacts', window.appId, 'public', 'data', 'activeUsages', usageId));
+                }
+                showToast('รับคืนสำเร็จ', 'บันทึกคืนสโตร์เรียบร้อย');
+            } catch (err) {
+                console.error("Return error:", err);
+            }
+        }
+
+        function exportCSV() {
+            let csvContent = "data:text/csv;charset=utf-8,ID,Code,Name,Total,Allocated,Borrowed,Remaining\n";
+            gears.forEach(g => {
+                const rem = Math.max(0, (g.total || 0) + (g.allocated || 0) - (g.borrowed || 0));
+                csvContent += `${g.id},${g.code},"${g.name}",${g.total || 0},${g.allocated || 0},${g.borrowed || 0},${rem}\n`;
+            });
+            const encodedUri = encodeURI(csvContent);
+            const link = document.createElement("a");
+            link.setAttribute("href", encodedUri);
+            link.setAttribute("download", `Rescue_Store_Report_${new Date().toISOString().slice(0,10)}.csv`);
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            showToast('ดาวน์โหลดแล้ว', 'ส่งออกไฟล์ CSV เรียบร้อย');
+        }
+
+        function showToast(title, message) {
+            const toast = document.getElementById('toast');
+            document.getElementById('toast-title').innerText = title;
+            document.getElementById('toast-msg').innerText = message;
+            toast.classList.remove('translate-y-20', 'opacity-0');
+            setTimeout(() => toast.classList.add('translate-y-20', 'opacity-0'), 3000);
+        }
+    </script>
+</body>
+</html>
+```
