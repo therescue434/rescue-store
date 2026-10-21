@@ -140,7 +140,7 @@
                     <h1 class="text-xs sm:text-sm font-bold text-white leading-tight truncate">
                         PohTeckTung Foundation
                     </h1>
-                    <p class="text-[9px] sm:text-[10px] text-red-100 opacity-90 truncate">คลังวัตถุดิบ/อุปกรณ์ โรงครัวฉุกเฉิน & สโตร์กู้ภัย 400</p>
+                    <p class="text-[9px] sm:text-[10px] text-red-100 opacity-90 truncate">สโตร์อุปกรณ์กู้ภัย"มูลนิธิป่อเต็กตึ๊ง"</p>
                 </div>
             </div>
 
@@ -197,7 +197,7 @@
             </div>
             <div class="bg-slate-800/90 border border-slate-700 rounded-lg p-2 shadow-sm">
                 <div id="stat-allocated-gear" class="text-base sm:text-lg font-bold text-emerald-400">0</div>
-                <div class="text-[10px] text-slate-400 font-medium">จัดนำส่ง</div>
+                <div class="text-[10px] text-slate-400 font-medium">นำเข้า/คืน</div>
             </div>
             <div class="bg-slate-800/90 border border-slate-700 rounded-lg p-2 shadow-sm">
                 <div id="stat-ready-gear" class="text-base sm:text-lg font-bold text-teal-300">0</div>
@@ -213,8 +213,8 @@
                         <thead class="bg-slate-900/90 text-slate-400 border-b border-slate-700 font-medium">
                             <tr>
                                 <th class="p-2.5 pl-3">ชื่อรายการ / ผู้ดำเนินการ</th>
-                                <th class="p-2.5 text-center text-slate-300 w-12">ทั้งหมด</th>
-                                <th class="p-2.5 text-center text-emerald-400 w-12">จัดนำ</th>
+                                <th class="p-2.5 text-center text-slate-300 w-12">ที่มีอยู่</th>
+                                <th class="p-2.5 text-center text-emerald-400 w-12">นำเข้า/ส่งคืน</th>
                                 <th class="p-2.5 text-center text-amber-400 w-12">เบิกออก</th>
                                 <th class="p-2.5 text-center text-teal-300 w-14">คงเหลือ</th>
                                 <th class="p-2.5 text-center w-20">จัดการ</th>
@@ -279,7 +279,7 @@
                     <thead class="bg-slate-900 text-slate-400 border-b border-slate-700 font-medium">
                         <tr>
                             <th class="p-2">รายการ</th>
-                            <th class="p-2">ผู้เบิก/ทีม</th>
+                            <th class="p-2">ผู้เบิก</th>
                             <th class="p-2">สถานที่/พิกัด</th>
                             <th class="p-2">เวลาเบิก</th>
                             <th class="p-2">สถานะ</th>
@@ -312,7 +312,7 @@
                 <i class="fa-solid fa-xmark"></i>
             </button>
             <h3 id="gear-modal-title" class="text-sm font-bold text-white mb-3 flex items-center gap-1.5">
-                <i class="fa-solid fa-boxes-stacked text-red-500"></i> เพิ่มรายการอุปกรณ์/วัตถุดิบใหม่
+                <i class="fa-solid fa-boxes-stacked text-red-500"></i> เพิ่มรายการอุปกรณ์กู้ภัย
             </h3>
 
             <form id="gear-form" onsubmit="saveGear(event)" class="space-y-3 text-xs">
@@ -334,7 +334,7 @@
                         <input type="number" id="gear-total" min="0" value="0" required class="w-full bg-slate-900 border border-slate-700 rounded-md p-2 text-white focus:border-red-500 focus:outline-none">
                     </div>
                     <div>
-                        <label class="block font-medium text-slate-300 mb-1">จัดนำส่ง</label>
+                        <label class="block font-medium text-slate-300 mb-1">นำเข้า/ส่งคืน</label>
                         <input type="number" id="gear-allocated" min="0" value="0" class="w-full bg-slate-900 border border-slate-700 rounded-md p-2 text-white focus:border-red-500 focus:outline-none">
                     </div>
                     <div>
@@ -358,7 +358,7 @@
                 <i class="fa-solid fa-xmark"></i>
             </button>
             <h3 class="text-sm font-bold text-white mb-2 flex items-center gap-1.5">
-                <i class="fa-solid fa-clipboard-check text-emerald-400"></i> ทำรายการเบิกอุปกรณ์/วัตถุดิบ
+                <i class="fa-solid fa-clipboard-check text-emerald-400"></i> ทำรายการเบิกอุปกรณ์กู้ภัย
             </h3>
 
             <form id="checkout-form" onsubmit="processCheckout(event)" class="space-y-3 text-xs">
@@ -383,7 +383,7 @@
                 </div>
 
                 <div class="border-t border-slate-700/80 pt-2 space-y-2">
-                    <p class="font-semibold text-slate-200">ข้อมูลผู้เบิก / ทีมปฏิบัติการ</p>
+                    <p class="font-semibold text-slate-200">ข้อมูลผู้เบิก</p>
                     <div class="grid grid-cols-2 gap-2">
                         <input type="text" id="checkout-borrower" required placeholder="ชื่อ-นามเรียกขาน (เช่น กู้ภัย 401)" class="w-full bg-slate-900 border border-slate-700 rounded-md p-2 text-white focus:border-red-500 focus:outline-none">
                         <input type="tel" id="checkout-phone" required placeholder="เบอร์โทรศัพท์" class="w-full bg-slate-900 border border-slate-700 rounded-md p-2 text-white focus:border-red-500 focus:outline-none">
@@ -397,7 +397,7 @@
                             <i class="fa-solid fa-crosshairs"></i> ดึง GPS ปัจจุบัน
                         </button>
                     </div>
-                    <input type="text" id="checkout-location-name" required placeholder="ระบุสถานที่เกิดเหตุ/จุดแจกจ่าย" class="w-full bg-slate-900 border border-slate-700 rounded-md p-2 text-white focus:border-red-500 focus:outline-none">
+                    <input type="text" id="checkout-location-name" required placeholder="ระบุสถานที่เกิดเหตุ" class="w-full bg-slate-900 border border-slate-700 rounded-md p-2 text-white focus:border-red-500 focus:outline-none">
                     
                     <div class="grid grid-cols-2 gap-2">
                         <input type="text" id="checkout-lat" placeholder="Latitude (เช่น 13.7563)" class="w-full bg-slate-900 border border-slate-700 rounded-md p-2 text-white focus:border-red-500 focus:outline-none">
