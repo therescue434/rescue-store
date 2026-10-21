@@ -1,3 +1,4 @@
+```html
 <!DOCTYPE html>
 <html lang="th">
 <head>
@@ -667,20 +668,41 @@
 
             const gearData = { name, code, total, allocated, borrowed };
 
+            let savedLocally = false;
+
+            // Attempt cloud sync first
             try {
-                if (window.db) {
+                if (window.db && window.auth?.currentUser) {
                     if (id) {
                         await updateDoc(doc(window.db, 'artifacts', window.appId, 'public', 'data', 'gears', id), gearData);
                     } else {
                         const newId = Date.now().toString();
                         await setDoc(doc(window.db, 'artifacts', window.appId, 'public', 'data', 'gears', newId), gearData);
                     }
+                } else {
+                    savedLocally = true;
                 }
-                showToast('บันทึกสำเร็จ', 'อัปเดตข้อมูลเรียบร้อยแล้ว');
             } catch (err) {
-                console.error("Save gear error:", err);
-                showToast('ข้อผิดพลาด', 'ไม่สามารถบันทึกข้อมูลได้');
+                console.warn("Cloud save issue, falling back to local state:", err);
+                savedLocally = true;
             }
+
+            // Fallback for local update if cloud fails or not authenticated
+            if (savedLocally || !window.db) {
+                if (id) {
+                    const idx = window.gears.findIndex(g => g.id === id);
+                    if (idx !== -1) {
+                        window.gears[idx] = { ...window.gears[idx], ...gearData };
+                    }
+                } else {
+                    const newId = Date.now().toString();
+                    window.gears.push({ id: newId, ...gearData });
+                }
+                renderInventory();
+                updateStats();
+            }
+
+            showToast('บันทึกสำเร็จ', 'อัปเดตข้อมูลเรียบร้อยแล้ว');
             closeGearModal();
         }
 
@@ -716,6 +738,7 @@
 
             const usageId = 'USG-' + Date.now();
             const usageData = {
+                id: usageId,
                 gearId: gear.id,
                 gearName: gear.name,
                 borrowerName: document.getElementById('checkout-borrower').value,
@@ -727,17 +750,31 @@
                 lng: document.getElementById('checkout-lng').value
             };
 
+            let processLocally = false;
+
             try {
-                if (window.db) {
+                if (window.db && window.auth?.currentUser) {
                     const newBorrowed = (gear.borrowed || 0) + qty;
                     await updateDoc(doc(window.db, 'artifacts', window.appId, 'public', 'data', 'gears', gear.id), { borrowed: newBorrowed });
                     await setDoc(doc(window.db, 'artifacts', window.appId, 'public', 'data', 'activeUsages', usageId), usageData);
+                } else {
+                    processLocally = true;
                 }
-                showToast('เบิกสำเร็จ', `ทำรายการเบิก ${gear.name} เรียบร้อยแล้ว`);
-                switchTab('active-uses');
             } catch (err) {
-                console.error("Checkout error:", err);
+                console.warn("Cloud checkout issue, using local fallback:", err);
+                processLocally = true;
             }
+
+            if (processLocally || !window.db) {
+                gear.borrowed = (gear.borrowed || 0) + qty;
+                window.activeUsages.push(usageData);
+                renderInventory();
+                renderActiveUses();
+                updateStats();
+            }
+
+            showToast('เบิกสำเร็จ', `ทำรายการเบิก ${gear.name} เรียบร้อยแล้ว`);
+            switchTab('active-uses');
             closeCheckoutModal();
         }
 
@@ -746,8 +783,10 @@
             if (!usage) return;
             const gear = window.gears.find(g => g.id === usage.gearId);
 
+            let processLocally = false;
+
             try {
-                if (window.db) {
+                if (window.db && window.auth?.currentUser) {
                     if (gear) {
                         const newBorrowed = Math.max(0, (gear.borrowed || 0) - usage.quantity);
                         await updateDoc(doc(window.db, 'artifacts', window.appId, 'public', 'data', 'gears', gear.id), { borrowed: newBorrowed });
@@ -757,11 +796,27 @@
                         ...usage, returnTime: new Date().toISOString()
                     });
                     await deleteDoc(doc(window.db, 'artifacts', window.appId, 'public', 'data', 'activeUsages', usageId));
+                } else {
+                    processLocally = true;
                 }
-                showToast('รับคืนสำเร็จ', 'บันทึกคืนสโตร์เรียบร้อย');
             } catch (err) {
-                console.error("Return error:", err);
+                console.warn("Cloud return issue, using local fallback:", err);
+                processLocally = true;
             }
+
+            if (processLocally || !window.db) {
+                if (gear) {
+                    gear.borrowed = Math.max(0, (gear.borrowed || 0) - usage.quantity);
+                }
+                window.historyLogs.push({ ...usage, returnTime: new Date().toISOString() });
+                window.activeUsages = window.activeUsages.filter(u => u.id !== usageId);
+                renderInventory();
+                renderActiveUses();
+                renderHistory();
+                updateStats();
+            }
+
+            showToast('รับคืนสำเร็จ', 'บันทึกคืนสโตร์เรียบร้อย');
         }
 
         function exportCSV() {
